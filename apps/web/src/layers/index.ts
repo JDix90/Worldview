@@ -36,6 +36,16 @@ export function buildLayerDefs(deps: { milStore: AircraftStore }): LayerDef[] {
       tickMs: 2000,
       maxInstances: 9000,
     }),
+    // Flag-only def: the civil-aircraft rendering lives in AircraftLayer.tsx
+    // (GlobeView reads this id from layersEnabled). Registered here so it
+    // gets the LayersPanel row + persistence like everything else.
+    {
+      id: 'flights',
+      label: 'CIVIL AIR',
+      defaultOn: true,
+      attribution: 'OpenSky Network',
+      init: () => ({ dispose() {} }),
+    },
     makeMilLayer(deps.milStore),
     windLayer,
     cyclonesLayer,

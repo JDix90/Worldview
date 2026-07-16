@@ -5,10 +5,12 @@ import { AircraftCard } from './ui/AircraftCard';
 import { FeedPanel } from './ui/FeedPanel';
 import { LayersPanel } from './ui/LayersPanel';
 import { ObjectCard } from './ui/ObjectCard';
+import { SpinToggle } from './ui/SpinToggle';
 import { AircraftStore } from './feed/aircraftStore';
 import { useAircraftFeed } from './feed/useAircraftFeed';
 import { buildLayerDefs } from './layers';
 import { loadEnabled, saveEnabled, type LayerCard } from './layers/registry';
+import { loadPrefs, savePrefs } from './prefs';
 
 export function App() {
   const store = useMemo(() => new AircraftStore(), []);
@@ -16,6 +18,14 @@ export function App() {
   const { status } = useAircraftFeed(store, milStore);
   const [selectedHex, setSelectedHex] = useState<string | null>(null);
   const [card, setCard] = useState<LayerCard | null>(null);
+  const [spinEnabled, setSpinEnabled] = useState(() => loadPrefs().spinEnabled);
+  const toggleSpin = useCallback(() => {
+    setSpinEnabled((prev) => {
+      const next = !prev;
+      savePrefs({ ...loadPrefs(), spinEnabled: next });
+      return next;
+    });
+  }, []);
 
   const layerDefs = useMemo(() => buildLayerDefs({ milStore }), [milStore]);
   const [layersEnabled, setLayersEnabled] = useState(() => loadEnabled(layerDefs));
@@ -52,6 +62,7 @@ export function App() {
         layerDefs={layerDefs}
         layersEnabled={layersEnabled}
         setCard={handleCard}
+        spinEnabled={spinEnabled}
       />
       <Hud store={store} feedStatus={status} />
       {selectedHex && (
@@ -59,6 +70,7 @@ export function App() {
       )}
       {card && !selectedHex && <ObjectCard card={card} onClose={() => setCard(null)} />}
       <FeedPanel />
+      <SpinToggle enabled={spinEnabled} onToggle={toggleSpin} />
       <LayersPanel defs={layerDefs} enabled={layersEnabled} onToggle={toggleLayer} />
     </>
   );

@@ -46,6 +46,7 @@ interface GlobeViewProps {
   layerDefs: LayerDef[];
   layersEnabled: Set<string>;
   setCard: (card: LayerCard | null) => void;
+  spinEnabled: boolean;
 }
 
 export function GlobeView({
@@ -55,6 +56,7 @@ export function GlobeView({
   layerDefs,
   layersEnabled,
   setCard,
+  spinEnabled,
 }: GlobeViewProps) {
   const globeRef = useRef<GlobeMethods | undefined>(undefined);
   const [material, setMaterial] = useState<THREE.ShaderMaterial | null>(null);
@@ -62,6 +64,8 @@ export function GlobeView({
   const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight });
 
   const sunDirRef = useRef(new THREE.Vector3(1, 0, 0));
+  const spinEnabledRef = useRef(spinEnabled);
+  spinEnabledRef.current = spinEnabled;
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
   const setCardRef = useRef(setCard);
@@ -112,12 +116,15 @@ export function GlobeView({
     return () => clearInterval(id);
   }, [ready, material]);
 
-  // Borderfall interaction tuning.
+  // Borderfall interaction tuning. The user's SPIN toggle is read through
+  // spinEnabledRef (never a dep — deps would re-add listeners and clear a
+  // pending resume timer): drag always pauses, but the resume timer only
+  // restarts the spin if the user hasn't paused it.
   useEffect(() => {
     if (!ready) return;
     const ctrl = globeRef.current?.controls() as GlobeControls | undefined;
     if (!ctrl) return;
-    ctrl.autoRotate = true;
+    ctrl.autoRotate = spinEnabledRef.current;
     ctrl.autoRotateSpeed = AUTO_ROTATE_SPEED;
     ctrl.minDistance = MIN_CAMERA_DISTANCE;
     ctrl.maxDistance = MAX_CAMERA_DISTANCE;
@@ -130,7 +137,7 @@ export function GlobeView({
     const onEnd = () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
-        ctrl.autoRotate = true;
+        ctrl.autoRotate = spinEnabledRef.current;
       }, AUTO_ROTATE_RESUME_MS);
     };
     ctrl.addEventListener('start', onStart);
@@ -141,6 +148,14 @@ export function GlobeView({
       ctrl.removeEventListener('end', onEnd);
     };
   }, [ready]);
+
+  // apply the SPIN toggle immediately (the interaction effect only reads it
+  // at mount and in the resume timer)
+  useEffect(() => {
+    if (!ready) return;
+    const ctrl = globeRef.current?.controls() as GlobeControls | undefined;
+    if (ctrl) ctrl.autoRotate = spinEnabled;
+  }, [ready, spinEnabled]);
 
   // ── layer mounting: diff enabled set against live instances ─────────
   useEffect(() => {
@@ -268,6 +283,7 @@ export function GlobeView({
           selectedHex={selectedHex}
           onSelect={onSelect}
           registerPicker={registerPickerRef.current}
+          visible={layersEnabled.has('flights')}
         />
       )}
     </>

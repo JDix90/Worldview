@@ -37,13 +37,25 @@ interface Props {
   selectedHex: string | null;
   onSelect: (hex: string | null) => void;
   registerPicker: (picker: Picker) => () => void;
+  /** LayersPanel 'flights' toggle — render-only; the feed/store keep running. */
+  visible: boolean;
 }
 
-export function AircraftLayer({ globe, store, selectedHex, onSelect, registerPicker }: Props) {
+export function AircraftLayer({ globe, store, selectedHex, onSelect, registerPicker, visible }: Props) {
   const selectedRef = useRef(selectedHex);
   selectedRef.current = selectedHex;
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
+  // via ref, NOT an effect dep — a dep would rebuild the 20k InstancedMesh
+  // on every toggle
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+
+  // hiding the markers deselects: a card pointing at an invisible marker
+  // with no halo would be a lie
+  useEffect(() => {
+    if (!visible) onSelectRef.current(null);
+  }, [visible]);
 
   useEffect(() => {
     const scene = globe.scene();
@@ -83,9 +95,24 @@ export function AircraftLayer({ globe, store, selectedHex, onSelect, registerPic
     let lastT = performance.now();
     const matrices = mesh.instanceMatrix.array as Float32Array;
 
+    const noopWriter = () => {};
+
     const loop = (t: number) => {
       const dtS = Math.min((t - lastT) / 1000, 0.25);
       lastT = t;
+
+      if (!visibleRef.current) {
+        // hidden: store.frame() must still run — it purges stale aircraft and
+        // advances render-position smoothing (skipping it grows the store and
+        // snaps positions on unhide). Only the render work is skipped.
+        activeCount = store.frame(dtS, noopWriter);
+        mesh.visible = false;
+        halo.visible = false;
+        raf = requestAnimationFrame(loop);
+        return;
+      }
+      mesh.visible = true;
+
       const camDist = camera.position.length();
       const s = Math.min(Math.max(camDist / SCALE_DIST_REF, SCALE_MIN), SCALE_MAX);
 
@@ -124,6 +151,7 @@ export function AircraftLayer({ globe, store, selectedHex, onSelect, registerPic
 
     // ── selection: offer the nearest aircraft to the central picker ────
     const unregister = registerPicker((px, py, rect, cam) => {
+      if (!visibleRef.current) return null; // hidden: clicks fall through to other layers
       const r2 = GLOBE_RADIUS * GLOBE_RADIUS;
       let bestHex: string | null = null;
       let bestD2 = PICK_RADIUS_PX * PICK_RADIUS_PX;
