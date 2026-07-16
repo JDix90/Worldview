@@ -21,6 +21,7 @@ const fragmentShader = /* glsl */ `
   uniform sampler2D dayMap;
   uniform sampler2D nightMap;
   uniform sampler2D topoMap;
+  uniform vec2 topoTexel;
   uniform vec3 sunDir;
 
   varying vec2 vUv;
@@ -40,11 +41,10 @@ const fragmentShader = /* glsl */ `
     // Terrain-perturbed normal: finite differences of the topology map applied
     // in the sphere's east/north tangent frame (globe is Y-up, never rotated —
     // globe.gl's auto-rotate orbits the camera, not the mesh).
-    vec2 texel = vec2(1.0 / 2048.0, 1.0 / 1024.0);
-    float hE = texture2D(topoMap, vUv + vec2(texel.x, 0.0)).r;
-    float hW = texture2D(topoMap, vUv - vec2(texel.x, 0.0)).r;
-    float hN = texture2D(topoMap, vUv + vec2(0.0, texel.y)).r;
-    float hS = texture2D(topoMap, vUv - vec2(0.0, texel.y)).r;
+    float hE = texture2D(topoMap, vUv + vec2(topoTexel.x, 0.0)).r;
+    float hW = texture2D(topoMap, vUv - vec2(topoTexel.x, 0.0)).r;
+    float hN = texture2D(topoMap, vUv + vec2(0.0, topoTexel.y)).r;
+    float hS = texture2D(topoMap, vUv - vec2(0.0, topoTexel.y)).r;
     vec3 east = normalize(vec3(-n.z, 0.0, n.x));
     vec3 north = normalize(cross(n, east));
     vec3 litNormal = normalize(n + RELIEF * ((hW - hE) * east + (hS - hN) * north));
@@ -67,24 +67,48 @@ const fragmentShader = /* glsl */ `
   }
 `;
 
+/**
+ * The material is created before react-globe.gl's renderer exists, so GL
+ * capabilities are probed on a throwaway context. Over-max anisotropy is a
+ * GL error on some stacks — clamp to what the hardware reports.
+ */
+function probeGlCaps(): { maxAnisotropy: number; maxTextureSize: number } {
+  try {
+    const gl = document.createElement('canvas').getContext('webgl2');
+    if (!gl) return { maxAnisotropy: 4, maxTextureSize: 4096 };
+    const ext = gl.getExtension('EXT_texture_filter_anisotropic');
+    const maxAnisotropy = ext ? (gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT) as number) : 1;
+    const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+    return { maxAnisotropy, maxTextureSize };
+  } catch {
+    return { maxAnisotropy: 4, maxTextureSize: 4096 };
+  }
+}
+
 export async function createTerminatorMaterial(): Promise<THREE.ShaderMaterial> {
+  const caps = probeGlCaps();
+  if (caps.maxTextureSize < 8192) {
+    console.warn(`[terminator] MAX_TEXTURE_SIZE ${caps.maxTextureSize} < 8192 — globe textures will downscale`);
+  }
   const loader = new THREE.TextureLoader();
   const [dayMap, nightMap, topoMap] = await Promise.all([
-    loader.loadAsync('/textures/earth-blue-marble.jpg'),
-    loader.loadAsync('/textures/earth-night.jpg'),
-    loader.loadAsync('/textures/earth-topology.png'),
+    loader.loadAsync('/textures/earth-day-8k.jpg'),
+    loader.loadAsync('/textures/earth-night-8k.jpg'),
+    loader.loadAsync('/textures/earth-topo-4k.png'),
   ]);
   dayMap.colorSpace = THREE.SRGBColorSpace;
   nightMap.colorSpace = THREE.SRGBColorSpace;
   for (const t of [dayMap, nightMap, topoMap]) {
-    t.anisotropy = 8;
+    t.anisotropy = Math.min(16, caps.maxAnisotropy);
   }
+  const topoImg = topoMap.image as { width: number; height: number };
 
   return new THREE.ShaderMaterial({
     uniforms: {
       dayMap: { value: dayMap },
       nightMap: { value: nightMap },
       topoMap: { value: topoMap },
+      topoTexel: { value: new THREE.Vector2(1 / topoImg.width, 1 / topoImg.height) },
       sunDir: { value: new THREE.Vector3(1, 0, 0) },
     },
     vertexShader,
