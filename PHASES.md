@@ -63,7 +63,7 @@ Render-only layers behind a client layer registry ([registry.ts](apps/web/src/la
 | A2 Wildfires | FIRMS VIIRS, client-direct + proxy fallback | ⏳ code complete, **blocked on owner's `FIRMS_MAP_KEY`** |
 | A3 Launches | Launch Library 2, client-direct | ✅ verified live — Starship Flight 13 card + T-minus correct |
 | A4 Sun & Moon | pure ephemeris (solar.ts + lunar.ts) | ✅ verified — markers placed correctly, `verify:lunar` passes |
-| B1 Aerosol/smoke | NASA GIBS AOD daily texture | ⬜ not started |
+| B1 Aerosol/smoke | NASA GIBS AOD via WMS GetMap (one global image) | ✅ verified live — smoke-grey haze veils over the fire fields |
 | C Wind particles | GFS/ECMWF (OPeNDAP retired — spike first) | ⬜ not started (3–5 day project, built last) |
 
 **Perf:** 2.25 ms/frame with all Phase-A layers on — well under the 5 ms budget. **Done when** B + C ship and the owner eyeballs each; A is done modulo the FIRMS key.
