@@ -55,6 +55,19 @@ Render-only layers behind a client layer registry ([registry.ts](apps/web/src/la
 
 **Done when:** all layers toggle cleanly and render within perf budget (✅ measured); cards open from clicks (✅ satellite + quake verified); owner re-verifies zoom feel at the 720 ceiling (✅ 2026-07-16 — "works and feels natural"). **Phase 1.5 complete.**
 
+## Phase 1.5b — Second furniture wave (2026-07-16, during soak; DECISIONS #55–59)
+
+| Layer | Source / path | Status |
+|---|---|---|
+| A1 Cyclones | NHC via server proxy `/api/proxy/storms` | ✅ verified live — Elida (TS, 55kt, 995mb) card matches NHC |
+| A2 Wildfires | FIRMS VIIRS, client-direct + proxy fallback | ⏳ code complete, **blocked on owner's `FIRMS_MAP_KEY`** |
+| A3 Launches | Launch Library 2, client-direct | ✅ verified live — Starship Flight 13 card + T-minus correct |
+| A4 Sun & Moon | pure ephemeris (solar.ts + lunar.ts) | ✅ verified — markers placed correctly, `verify:lunar` passes |
+| B1 Aerosol/smoke | NASA GIBS AOD daily texture | ⬜ not started |
+| C Wind particles | GFS/ECMWF (OPeNDAP retired — spike first) | ⬜ not started (3–5 day project, built last) |
+
+**Perf:** 2.25 ms/frame with all Phase-A layers on — well under the 5 ms budget. **Done when** B + C ship and the owner eyeballs each; A is done modulo the FIRMS key.
+
 ## Phases 2+ — sketches only (one paragraph each, contingent on the gate)
 
 **Phase 2 — Second layer.** Add one more collector through the existing seams — candidate chosen *at the time* by what Phase 1 taught us (likely candidates: earthquakes/USGS for its clean feed, or weather overlay for globe beauty; but the gate review decides). The test of the architecture: a new source should be an adapter, a baseline config, and detectors — no changes to stages' contracts. Real NOTAM integration for the analyst belongs here if the traffic-collapse detector proved useful.

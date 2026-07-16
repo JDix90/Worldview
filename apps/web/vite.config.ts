@@ -18,6 +18,7 @@ export default defineConfig(({ mode }) => {
     // build, token never leaves this machine. Revisit at Phase 4 (off the desk).
     define: {
       __ORRERY_TOKEN__: JSON.stringify(env.ORRERY_AUTH_TOKEN ?? ''),
+      __FIRMS_KEY__: JSON.stringify(env.FIRMS_MAP_KEY ?? ''),
     },
     server: {
       proxy: {

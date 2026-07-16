@@ -112,6 +112,43 @@ export function registerApi(
       return { regions };
     });
 
+    // ── upstream proxies for furniture layers whose sources lack CORS ──
+    // (NHC storms; FIRMS fires as fallback). Cached in-memory; stale copies
+    // are served when the upstream hiccups — furniture degrades, never errors.
+    const proxyCache = new Map<string, { at: number; body: unknown; contentType: string }>();
+    const proxied = async (key: string, url: string, ttlMs: number, contentType: string) => {
+      const hit = proxyCache.get(key);
+      if (hit && Date.now() - hit.at < ttlMs) return hit;
+      try {
+        const res = await fetch(url, { headers: { 'user-agent': 'ORRERY (personal, non-commercial)' } });
+        if (!res.ok) throw new Error(`${key} upstream HTTP ${res.status}`);
+        const body = contentType === 'application/json' ? await res.json() : await res.text();
+        const entry = { at: Date.now(), body, contentType };
+        proxyCache.set(key, entry);
+        return entry;
+      } catch (err) {
+        if (hit) return hit; // stale beats nothing for display furniture
+        throw err;
+      }
+    };
+
+    scope.get('/api/proxy/storms', async (_req, reply) => {
+      const entry = await proxied('storms', 'https://www.nhc.noaa.gov/CurrentStorms.json', 15 * 60_000, 'application/json');
+      return reply.type(entry.contentType).send(entry.body);
+    });
+
+    scope.get('/api/proxy/fires', async (_req, reply) => {
+      const key = process.env.FIRMS_MAP_KEY ?? '';
+      if (!key) return reply.code(503).send({ error: 'FIRMS_MAP_KEY not configured' });
+      const entry = await proxied(
+        'fires',
+        `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${key}/VIIRS_SNPP_NRT/world/1`,
+        30 * 60_000,
+        'text/csv',
+      );
+      return reply.type(entry.contentType).send(entry.body);
+    });
+
     scope.get('/api/analyst/usage', async () => {
       const { rows } = await pool.query(
         `SELECT coalesce(sum(est_cost_usd), 0)::float8 AS mtd_usd,

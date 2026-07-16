@@ -132,6 +132,18 @@ Running log. Every non-obvious choice gets a line: what was decided, why, what w
 
 54. **Aurora shader boosted for visibility.** Data and placement were correct all along (OVATION oval verified at 60–75°N / 60–90°S), just too faint to notice over city lights. Raised canvas gain 2.2→3.0, added `pow(p,0.65)` to lift the faint majority of the oval, widened the night mask slightly into twilight, and multiplied the additive output 2.4×. Verified visibly rendering on the night-side auroral zone. Pure tuning — no logic change.
 
+## 2026-07-16 — Phase 1.5b (second furniture wave: fast set + aerosol + wind)
+
+55. **Six more furniture layers approved during the soak** (same DECISIONS #46 rule — render-only, gate untouched). Fast set built + verified live this session: **cyclones** (A1), **wildfires** (A2, key-blocked), **launches** (A3), **sun/moon** (A4). Aerosol (B) and wind (C) still to come. Every source re-verified live before building, not from memory — the discipline paid off twice (see #56, #57).
+
+56. **NOAA retired OPeNDAP in 2025 (Service Change Notice 25-81)** — the "clean GFS wind" path I'd have built from memory is dead (returns a 301 to a retirement notice). Recorded so the wind layer (Phase C) is planned against reality: it now needs a GRIB2-decode spike (gribberish-WASM in the worker, or ECMWF open-data, or an Open-Meteo coarse-grid fallback), which is why wind is timeboxed and built last. *Lesson reinforced: verify every source live; a remembered API is a stale API.*
+
+57. **Per-source data-path decisions (all verified live 2026-07-16):** NHC CurrentStorms.json has **no CORS** → server proxy `/api/proxy/storms` (15-min in-memory cache, **stale-serve on upstream error** — furniture degrades, never errors). Launch Library 2 is **CORS-open** → client-direct, 20-min refresh + localStorage cache (15 req/hr free tier). NASA GIBS WMTS is **CORS-open** → client-direct daily AOD tiles. FIRMS needs a key → client-direct via `__FIRMS_KEY__` **with automatic fallback to `/api/proxy/fires`** (server reads `FIRMS_MAP_KEY`) if the browser origin is blocked. Sun/moon need **no source** — pure ephemeris ([solar.ts](apps/web/src/globe/solar.ts) + new [lunar.ts](apps/web/src/globe/lunar.ts), truncated Meeus, verified against J2000 syzygies by `verify:lunar`).
+
+58. **GIBS aerosol tiles are the aurora texture pattern, not tile streaming.** Phase B fetches ≤8 static low-zoom AOD tiles once daily to stitch one global equirect texture draped on an overlay sphere — no interactive zoom tiles, no per-frame requests. FOUNDATION's "no tile streaming, ever" non-goal targets street-level interactive tiles; this doesn't cross it. (Documented pre-emptively; B not yet built.)
+
+59. **Docker AOF-corruption recovery (operational note).** A Docker Desktop engine hang required a force-kill (`pkill -9 com.docker`), which truncated Redis's incremental AOF mid-write → Redis restart-looped with "Bad file format". Fix: `redis-check-aof --fix` on the multi-part manifest via a throwaway container against the `orrery_redisdata` volume — truncated 22KB of the last partial write out of 49MB. **Zero real loss**: Redis holds only ephemeral hot state (rebuilt by the collector every poll) + rebuildable detector/cap state; all durable data (baselines 8,041 bins, briefings, signals) is in Postgres, which survived cleanly. Docker instability has now recurred 3×; strengthens the eventual dedicated-box argument (Phase 4) and the "keep the Mac awake, Docker start-at-login" advice.
+
 ### Assumptions pending owner confirmation
 
 - OpenSky registered account + API client will be created by the owner; credentials into `.env`. **Blocks the collector chunk.**

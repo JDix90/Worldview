@@ -109,6 +109,8 @@ Build the seams for more collectors (the `SourceAdapter` interface, the `source`
 
 **Amendment 2026-07-16 — Phase 1.5 "furniture" (DECISIONS #46).** The boundary above governs *anomaly verticals* (anything flowing through Stages 2–4). Render-only globe furniture — layers that draw but emit no Signals, hold no baselines, and cost the analyst nothing — was approved during the baseline warm-up: satellites (CelesTrak, client-side SGP4), earthquakes (USGS), aurora (NOAA SWPC), military aircraft (adsb.fi `/v2/mil`, already-budgeted source), and a live GPS-jamming overlay of our own integrity data. Keyless CORS-open public feeds are fetched client-direct (DECISIONS #47); a furniture layer promoted to a vertical post-gate moves its fetcher into the four-stage pipeline, renderer unchanged. The Go/No-Go questions remain a test of the flights vertical and its analyst.
 
+**Amendment 2026-07-16 — Phase 1.5b furniture (DECISIONS #55–59).** Six more furniture layers, same rule: tropical cyclones (NHC, server-proxied — no CORS), wildfires (NASA FIRMS, key-gated), launches (Launch Library 2), sun & moon (pure ephemeris), aerosol/smoke (NASA GIBS AOD texture), and wind particles (GFS/ECMWF, pending a GRIB2 spike since NOAA retired OPeNDAP). Sources without CORS get a thin bearer-authed server proxy with stale-serve caching; none touch Stages 2–4. Gate unchanged.
+
 ---
 
 ## 6. Signal schema

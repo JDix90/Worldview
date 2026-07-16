@@ -8,6 +8,10 @@ import { makeSatellitesLayer } from './satellites/satellites';
 import { auroraLayer } from './aurora';
 import { makeMilLayer } from './milAircraft';
 import { jammingLayer } from './jamming';
+import { cyclonesLayer } from './cyclones';
+import { wildfiresLayer } from './wildfires';
+import { launchesLayer } from './launches';
+import { sunMoonLayer } from './sunmoon';
 
 export function buildLayerDefs(deps: { milStore: AircraftStore }): LayerDef[] {
   return [
@@ -31,8 +35,12 @@ export function buildLayerDefs(deps: { milStore: AircraftStore }): LayerDef[] {
       maxInstances: 9000,
     }),
     makeMilLayer(deps.milStore),
+    cyclonesLayer,
+    wildfiresLayer,
     earthquakesLayer,
+    launchesLayer,
     jammingLayer,
     auroraLayer,
+    sunMoonLayer,
   ];
 }

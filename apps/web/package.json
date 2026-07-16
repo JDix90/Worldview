@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "verify:solar": "tsx scripts/verifySolar.ts",
-    "verify:iss": "node scripts/verifyIss.mjs"
+    "verify:iss": "node scripts/verifyIss.mjs",
+    "verify:lunar": "tsx scripts/verifyLunar.ts"
   },
   "dependencies": {
     "@orrery/shared": "workspace:*",
