@@ -12,7 +12,15 @@ import { apiGet } from '../feed/api';
 import { latLngToWorld } from '../globe/surfaceMath';
 
 const REFRESH_MS = 30 * 60_000;
-const MAX_FIRES = 40_000;
+/**
+ * Render cap. World/1-day in fire season is ~95k VIIRS detections; that many
+ * additively-blended discs overdraw badly in dense regions (Siberia, boreal
+ * Canada). We keep the highest-FRP detections — the visually meaningful
+ * fires — and drop the low-power tail. NOAA-20, because Suomi-NPP's NRT feed
+ * is deprecated and returns zero rows (verified live 2026-07-16).
+ */
+const MAX_FIRES = 50_000;
+const FIRMS_SOURCE = 'VIIRS_NOAA20_NRT';
 const PICK_RADIUS_PX = 14;
 
 interface Fire {
@@ -32,14 +40,14 @@ function parseCsv(csv: string): Fire[] {
     iConf = col('confidence'), iDate = col('acq_date'), iTime = col('acq_time'),
     iSat = col('satellite');
   if (iLat < 0 || iLon < 0) return [];
-  const out: Fire[] = [];
-  for (let i = 1; i < lines.length && out.length < MAX_FIRES; i++) {
+  const all: Fire[] = [];
+  for (let i = 1; i < lines.length; i++) {
     const f = lines[i]!.split(',');
     const lat = Number(f[iLat]);
     const lon = Number(f[iLon]);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
     const t = (f[iTime] ?? '').padStart(4, '0');
-    out.push({
+    all.push({
       lat,
       lon,
       frp: Number(f[iFrp]) || 0,
@@ -48,7 +56,13 @@ function parseCsv(csv: string): Fire[] {
       sensor: f[iSat] ?? 'VIIRS',
     });
   }
-  return out;
+  // keep the most significant fires when over budget (biggest FRP, not a
+  // geographic head-of-CSV slice)
+  if (all.length > MAX_FIRES) {
+    all.sort((a, b) => b.frp - a.frp);
+    all.length = MAX_FIRES;
+  }
+  return all;
 }
 
 const vertexShader = /* glsl */ `
@@ -140,7 +154,7 @@ export const wildfiresLayer: LayerDef = {
       if (__FIRMS_KEY__) {
         try {
           const res = await fetch(
-            `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${__FIRMS_KEY__}/VIIRS_SNPP_NRT/world/1`,
+            `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${__FIRMS_KEY__}/${FIRMS_SOURCE}/world/1`,
           );
           if (res.ok) return await res.text();
           console.warn(`[fires] FIRMS direct HTTP ${res.status} — falling back to proxy`);

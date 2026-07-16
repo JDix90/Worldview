@@ -142,7 +142,8 @@ export function registerApi(
       if (!key) return reply.code(503).send({ error: 'FIRMS_MAP_KEY not configured' });
       const entry = await proxied(
         'fires',
-        `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${key}/VIIRS_SNPP_NRT/world/1`,
+        // NOAA-20: Suomi-NPP NRT is deprecated (0 rows, verified 2026-07-16)
+        `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${key}/VIIRS_NOAA20_NRT/world/1`,
         30 * 60_000,
         'text/csv',
       );
