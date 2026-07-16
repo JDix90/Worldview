@@ -4,7 +4,15 @@
  */
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
-import { daytypeOf, maturityOf, type BaselineEntry, type Daytype } from '@orrery/shared';
+import type { Redis } from 'ioredis';
+import {
+  GPS_WATCH_REGIONS,
+  REDIS_KEYS,
+  daytypeOf,
+  maturityOf,
+  type BaselineEntry,
+  type Daytype,
+} from '@orrery/shared';
 import { env } from './env.js';
 import type { SnapshotFeed } from './snapshotFeed.js';
 
@@ -24,7 +32,12 @@ function toEntry(r: BaselineRow): BaselineEntry {
   return { ...r, maturity: maturityOf(r.days, r.daytype) };
 }
 
-export function registerApi(app: FastifyInstance, pool: pg.Pool, feed: SnapshotFeed): void {
+export function registerApi(
+  app: FastifyInstance,
+  pool: pg.Pool,
+  feed: SnapshotFeed,
+  redis: Redis,
+): void {
   app.register(async (scope) => {
     scope.addHook('preHandler', async (req, reply) => {
       if (req.headers.authorization !== `Bearer ${env.authToken}`) {
@@ -70,6 +83,33 @@ export function registerApi(app: FastifyInstance, pool: pg.Pool, feed: SnapshotF
          FROM shadow_push ORDER BY ts DESC LIMIT 100`,
       );
       return { entries: rows };
+    });
+
+    // Live per-region GPS integrity (the jamming furniture layer reads this).
+    // Same NIC≤4 logic as detector D3, over the same hot sweep keys.
+    scope.get('/api/integrity/now', async () => {
+      const nowS = Date.now() / 1000;
+      const regions = await Promise.all(
+        GPS_WATCH_REGIONS.map(async (region) => {
+          const raw = await redis.get(REDIS_KEYS.hotIntegrity(region.id));
+          if (!raw) {
+            return { regionId: region.id, name: region.name, fraction: null, aircraft: 0, fetchedAt: 0 };
+          }
+          const parsed = JSON.parse(raw) as { fetchedAt: number; aircraft: Array<{ nic?: number }> };
+          const withNic = parsed.aircraft.filter((a) => typeof a.nic === 'number');
+          const stale = nowS - parsed.fetchedAt > 600;
+          return {
+            regionId: region.id,
+            name: region.name,
+            fraction: stale || withNic.length === 0
+              ? null
+              : withNic.filter((a) => (a.nic as number) <= 4).length / withNic.length,
+            aircraft: withNic.length,
+            fetchedAt: parsed.fetchedAt,
+          };
+        }),
+      );
+      return { regions };
     });
 
     scope.get('/api/analyst/usage', async () => {

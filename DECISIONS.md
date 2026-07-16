@@ -108,6 +108,20 @@ Running log. Every non-obvious choice gets a line: what was decided, why, what w
 
 45. **Replay harness ([replayDetectors.ts](apps/worker/scripts/replayDetectors.ts)) closes the chunk 5 DoD** by running the pure detectors against *recorded* raw files from `data/raw/` with injected anomalies — 14 scenarios covering every DoD bullet, no network/DB/Redis. This is the payoff of two structural choices: detectors as pure functions (state in, events out) and the 48h raw store (DECISIONS #14 — first concrete use).
 
+## 2026-07-16 — Phase 1.5 (globe furniture, built during baseline warm-up)
+
+46. **Furniture vs vertical is the governing distinction.** Render-only layers (no Signals, no Stages 2–4, no analyst cost) don't presume the Go/No-Go gate; anomaly verticals do. Approved furniture: satellites, earthquakes, aurora, military air, GPS-jamming overlay. Deferred: wind particles (project-sized, deserves its own phase), lightning (Blitzortung ToS/fragility), ships (no viable free source; aisstream.io noted), air quality and wildfires (post-gate vertical candidates — fires should debut as the analyst's second vertical, not as dots). Gate questions stay a test of the flights vertical.
+
+47. **Client-direct fetch policy for keyless, CORS-open public feeds** (CelesTrak, USGS, SWPC) — no backend plumbing for render-only layers. Promotion path: a layer that earns vertical status post-gate moves its fetcher server-side into the four-stage pipeline; the renderer doesn't change. mil/jamming layers ride existing backend (adsb.fi collector, hot integrity keys) since those sources already live there.
+
+48. **Satellites: SGP4 in a Web Worker at 1–2s ticks, main thread lerps world positions between frames.** 8k × SGP4 on the render loop would cost ~100ms/frame; the worker makes it ~zero (measured: 15,613 total instances render at 1.43ms/frame GPU-synced). satellite.js pinned to **v5** (pure JS) — v7 ships a WASM/pthreads build with top-level await that breaks esbuild dep-optimization and module workers. `optimizeDeps.include` pins pre-bundling so workers never race a mid-session re-optimization (504 Outdated Optimize Dep → opaque worker error). Propagation validated live: ISS within 0.03° of wheretheiss.at; GNSS shell at r≈417; GEO ring at r≈661.4, world-stationary. `verify:iss` script guards the math.
+
+49. **Curated satellite default (~400: stations, GNSS constellations, brightest, weather) with Starlink (~9k) as an off-default toggle.** `weather` group added so the GEO ring is populated (GOES/Meteosat/Himawari). TLE etiquette: 6h cache in localStorage for ALL groups including bulky ones, stale-cache fallback on fetch failure — CelesTrak 403'd repeat Starlink pulls during testing, which is exactly the throttle the cache now respects.
+
+50. **Central picking arbitration.** One pointer handler (GlobeView) collects candidates from per-layer Pickers; globally nearest within each layer's forgiving radius wins; empty click clears selection and card. AircraftLayer's private listeners refactored into the same mechanism. Shared tangent-frame math extracted to [surfaceMath.ts](apps/web/src/globe/surfaceMath.ts).
+
+51. **Zoom ceiling 480 → 720** ("space band") so GEO is visible; inner zoom curve untouched. Owner re-verification of feel at the outer band pending (the one human gate in Phase 1.5).
+
 ### Assumptions pending owner confirmation
 
 - OpenSky registered account + API client will be created by the owner; credentials into `.env`. **Blocks the collector chunk.**

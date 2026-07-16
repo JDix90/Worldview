@@ -27,6 +27,8 @@ function rateLimited<T>(fn: () => Promise<T>): Promise<T> {
 interface AdsbfiAircraft {
   hex?: string;
   flight?: string;
+  t?: string; // airframe type code
+  r?: string; // registration
   lat?: number;
   lon?: number;
   alt_baro?: number | 'ground';
@@ -57,6 +59,8 @@ function normalize(ac: AdsbfiAircraft, nowSec: number): AircraftState | null {
   return {
     hex: ac.hex.toLowerCase(),
     callsign: ac.flight?.trim() || undefined,
+    typeCode: ac.t,
+    registration: ac.r?.trim() || undefined,
     lat: ac.lat,
     lon: ac.lon,
     altBaroM: typeof ac.alt_baro === 'number' ? ac.alt_baro * FT_TO_M : undefined,
@@ -102,4 +106,9 @@ export function fetchBySquawk(code: string): Promise<AdsbfiResult> {
 
 export function fetchRadius(lat: number, lon: number, radiusNm: number): Promise<AdsbfiResult> {
   return get(`/v3/lat/${lat}/lon/${lon}/dist/${radiusNm}`);
+}
+
+/** All military-flagged aircraft (adsb.fi maintains the registry flag). */
+export function fetchMil(): Promise<AdsbfiResult> {
+  return get('/v2/mil');
 }

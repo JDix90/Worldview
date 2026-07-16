@@ -75,6 +75,7 @@ check('unknown model uses expensive fallback', estimateCostUsd('mystery', 1_000_
 const pool = createPool();
 await ensureSchema(pool);
 const client = await pool.connect();
+const usageBefore = await client.query('SELECT count(*)::int AS n FROM analyst_usage');
 await client.query('BEGIN');
 try {
   let transportCalls = 0;
@@ -107,7 +108,11 @@ try {
   const sent = JSON.stringify(lastParams);
   check('synthetic signals reached the prompt', sent.includes('SYNTHETIC 7700 cluster'));
   check('briefing sends no web-search tool', !sent.includes('web_search'));
-  check('usage row recorded', (await client.query(`SELECT count(*)::int AS n FROM analyst_usage`)).rows[0].n === 1);
+  check(
+    'usage row recorded',
+    (await client.query(`SELECT count(*)::int AS n FROM analyst_usage`)).rows[0].n ===
+      usageBefore.rows[0].n + 1,
+  );
 
   // trip the breaker, expect degradation without a transport call
   await client.query(

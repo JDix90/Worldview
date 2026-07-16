@@ -26,6 +26,10 @@ export interface AircraftState {
   category?: string;
   /** Origin country (OpenSky only, receiver-registry derived). */
   originCountry?: string;
+  /** Airframe type code, e.g. "F16" (adsb.fi registry data). */
+  typeCode?: string;
+  /** Registration / tail number (adsb.fi registry data). */
+  registration?: string;
   /** Navigation Integrity Category (adsb.fi only) — the GPS-interference input. */
   nic?: number;
   /** Radius of containment, meters (adsb.fi only). */

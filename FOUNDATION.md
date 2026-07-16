@@ -107,6 +107,8 @@ Hard boundary. **No satellites, no weather, no earthquakes, no air quality — r
 
 Build the seams for more collectors (the `SourceAdapter` interface, the `source` field on Signals) but no plumbing for collectors that may never exist.
 
+**Amendment 2026-07-16 — Phase 1.5 "furniture" (DECISIONS #46).** The boundary above governs *anomaly verticals* (anything flowing through Stages 2–4). Render-only globe furniture — layers that draw but emit no Signals, hold no baselines, and cost the analyst nothing — was approved during the baseline warm-up: satellites (CelesTrak, client-side SGP4), earthquakes (USGS), aurora (NOAA SWPC), military aircraft (adsb.fi `/v2/mil`, already-budgeted source), and a live GPS-jamming overlay of our own integrity data. Keyless CORS-open public feeds are fetched client-direct (DECISIONS #47); a furniture layer promoted to a vertical post-gate moves its fetcher into the four-stage pipeline, renderer unchanged. The Go/No-Go questions remain a test of the flights vertical and its analyst.
+
 ---
 
 ## 6. Signal schema
@@ -209,6 +211,7 @@ Feel parameters transplanted from Borderfall:
 - Auto-rotate pauses on the controls' own `start` event; resumes **2.5s** after `end`.
 - Camera pans via `pointOfView(…, 800ms)`.
 - globe.gl's distance-scaled rotate/zoom speeds provide the zoom curve that slows near the surface.
+- Zoom clamps: camera distance 115 (country/region floor) to **720** (the Phase 1.5 "space band" — puts the GEO ring at ~661 in view; raised from 480 on 2026-07-16, inner curve untouched; owner re-verified the feel 2026-07-16 — "works and feels natural").
 
 Phase 1 rendering (all custom, on top of the scaffold): day/night terminator via custom shader on `globeMaterial()` blending day texture and night-lights texture by computed solar position (the terminator is cheap and sells realism harder than anything else — Phase 1, not polish); aircraft as heading-oriented instanced markers with client-side dead reckoning; forgiving click targets.
 

@@ -40,6 +40,21 @@ Haiku triage on S1/S2 fire (web check ≤10/day, Assessment output). Sonnet dail
 
 ---
 
+## Phase 1.5 — Globe furniture (built 2026-07-16, during baseline warm-up)
+
+Render-only layers behind a client layer registry ([registry.ts](apps/web/src/layers/registry.ts), toggles in LayersPanel, localStorage persistence, centralized picking). No Signals, no Stage 2–4 involvement — see FOUNDATION §5 amendment and DECISIONS #46–51.
+
+| Layer | Source | Status |
+|---|---|---|
+| Satellites (curated ~400) | CelesTrak GP, SGP4 in Web Worker | ✅ ISS validated to 0.03°; GNSS + GEO shells at correct radii |
+| Starlink shell (~9k, off-default) | CelesTrak | ✅ renders; 1.43ms/frame with everything on |
+| Earthquakes | USGS 2.5_day GeoJSON | ✅ 56 events, magnitude-scaled pulses, cards |
+| Aurora | NOAA SWPC OVATION | ✅ night-side polar glow, correct hemisphere placement |
+| Military air | adsb.fi /v2/mil via collector→WS | ✅ ~130–140 airborne, distinct markers, registry cards |
+| GPS jamming | own integrity sweeps via /api/integrity/now | ✅ region discs tint with live NIC fractions |
+
+**Done when:** all layers toggle cleanly and render within perf budget (✅ measured); cards open from clicks (✅ satellite + quake verified); owner re-verifies zoom feel at the 720 ceiling (✅ 2026-07-16 — "works and feels natural"). **Phase 1.5 complete.**
+
 ## Phases 2+ — sketches only (one paragraph each, contingent on the gate)
 
 **Phase 2 — Second layer.** Add one more collector through the existing seams — candidate chosen *at the time* by what Phase 1 taught us (likely candidates: earthquakes/USGS for its clean feed, or weather overlay for globe beauty; but the gate review decides). The test of the architecture: a new source should be an adapter, a baseline config, and detectors — no changes to stages' contracts. Real NOTAM integration for the analyst belongs here if the traffic-collapse detector proved useful.

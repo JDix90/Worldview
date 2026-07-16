@@ -12,6 +12,8 @@ export const REDIS_KEYS = {
   hotSquawk: (code: string) => `hot:squawk:${code}`,
   /** Latest integrity sweep for a watch region, JSON {fetchedAt, aircraft}. */
   hotIntegrity: (regionId: string) => `hot:integrity:${regionId}`,
+  /** Latest military-flagged aircraft (adsb.fi /v2/mil), JSON {fetchedAt, aircraft}. */
+  hotMil: 'hot:mil',
   /** Daily OpenSky credit spend counter (our own accounting). */
   openskyCredits: (isoDate: string) => `credits:opensky:${isoDate}`,
   /** '1'/'0' — D0's verdict this cycle; baseline-dependent detectors must respect it. */

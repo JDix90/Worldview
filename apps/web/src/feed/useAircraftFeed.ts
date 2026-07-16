@@ -14,10 +14,15 @@ const WATCHDOG_MS = 75_000;
 const BACKOFF_START_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
 
-export function useAircraftFeed(store: AircraftStore): { status: FeedStatus } {
+export function useAircraftFeed(
+  store: AircraftStore,
+  milStore?: AircraftStore,
+): { status: FeedStatus } {
   const [status, setStatus] = useState<FeedStatus>('connecting');
   const storeRef = useRef(store);
   storeRef.current = store;
+  const milStoreRef = useRef(milStore);
+  milStoreRef.current = milStore;
 
   useEffect(() => {
     let ws: WebSocket | null = null;
@@ -49,6 +54,13 @@ export function useAircraftFeed(store: AircraftStore): { status: FeedStatus } {
           setStatus('live');
         } else if (msg.type === 'delta') {
           storeRef.current.applyDelta(msg);
+        } else if (msg.type === 'mil') {
+          // the mil set is small and sent whole — treat each frame as a snapshot
+          milStoreRef.current?.applySnapshot({
+            type: 'snapshot',
+            fetchedAt: msg.fetchedAt,
+            aircraft: msg.aircraft,
+          });
         }
         // meta frames only refresh lastMessageAt (watchdog food)
       });

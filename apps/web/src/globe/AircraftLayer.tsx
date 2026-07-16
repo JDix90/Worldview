@@ -4,32 +4,30 @@
  * the frame budget). Orientation = surface tangent frame rotated to the
  * aircraft's track; position = the store's smoothed dead-reckoned fix.
  *
- * Selection is deliberately not a raycast: on click we project every rendered
- * aircraft to screen space and take the nearest within a generous radius —
- * uniformly forgiving at every zoom level (FOUNDATION §10 "forgiving click
- * targets"), with a silhouette test so aircraft behind the globe can't be hit.
+ * Selection is deliberately not a raycast: the layer registers a Picker with
+ * GlobeView's central pointer handler — projecting every rendered aircraft to
+ * screen space and offering the nearest within a generous radius — uniformly
+ * forgiving at every zoom level (FOUNDATION §10 "forgiving click targets"),
+ * with a silhouette test so aircraft behind the globe can't be hit.
  */
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import type { GlobeMethods } from 'react-globe.gl';
 import type { AircraftStore } from '../feed/aircraftStore';
+import type { Picker } from '../layers/registry';
+import { latLngToWorld, writeHeadingMatrix, GLOBE_RADIUS, EARTH_RADIUS_M } from './surfaceMath';
 
 const MAX_INSTANCES = 20_000;
-const GLOBE_RADIUS = 100;
 /** World units of clearance above the surface + gentle altitude exaggeration. */
 const BASE_CLEARANCE = 0.5;
 const ALT_EXAGGERATION = 3;
-const EARTH_RADIUS_M = 6_371_000;
 /** Marker scale vs camera distance (constant-ish apparent size). */
 const SCALE_DIST_REF = 280;
 const SCALE_MIN = 0.5;
 const SCALE_MAX = 1.8;
 /** Forgiving click radius, CSS pixels. */
 const PICK_RADIUS_PX = 18;
-/** Max pointer travel for a gesture to count as a click, not a drag. */
-const CLICK_SLOP_PX = 6;
 
-const DEG = Math.PI / 180;
 const MARKER_COLOR = 0xffb300;
 const HALO_COLOR = 0x4fd8ff;
 
@@ -38,9 +36,10 @@ interface Props {
   store: AircraftStore;
   selectedHex: string | null;
   onSelect: (hex: string | null) => void;
+  registerPicker: (picker: Picker) => () => void;
 }
 
-export function AircraftLayer({ globe, store, selectedHex, onSelect }: Props) {
+export function AircraftLayer({ globe, store, selectedHex, onSelect, registerPicker }: Props) {
   const selectedRef = useRef(selectedHex);
   selectedRef.current = selectedHex;
   const onSelectRef = useRef(onSelect);
@@ -49,7 +48,6 @@ export function AircraftLayer({ globe, store, selectedHex, onSelect }: Props) {
   useEffect(() => {
     const scene = globe.scene();
     const camera = globe.camera() as THREE.PerspectiveCamera;
-    const renderer = globe.renderer() as THREE.WebGLRenderer;
 
     // sanity-check our inlined lat/lng→world convention against globe.gl's own
     const probe = globe.getCoords(37, -122, 0);
@@ -100,7 +98,7 @@ export function AircraftLayer({ globe, store, selectedHex, onSelect }: Props) {
         positions[i * 3] = pos.x;
         positions[i * 3 + 1] = pos.y;
         positions[i * 3 + 2] = pos.z;
-        writeMatrix(matrices, i, pos, lat, lon, trackDeg, s);
+        writeHeadingMatrix(matrices, i, pos, trackDeg, s);
         if (hex === selectedRef.current) selectedIdx = i;
       });
       mesh.count = activeCount;
@@ -124,27 +122,16 @@ export function AircraftLayer({ globe, store, selectedHex, onSelect }: Props) {
     };
     raf = requestAnimationFrame(loop);
 
-    // ── selection ──────────────────────────────────────────────────────
-    const dom = renderer.domElement;
-    let downX = 0;
-    let downY = 0;
-    const onDown = (ev: PointerEvent) => {
-      downX = ev.clientX;
-      downY = ev.clientY;
-    };
-    const onUp = (ev: PointerEvent) => {
-      if (Math.hypot(ev.clientX - downX, ev.clientY - downY) > CLICK_SLOP_PX) return; // drag
-      const rect = dom.getBoundingClientRect();
-      const px = ev.clientX - rect.left;
-      const py = ev.clientY - rect.top;
+    // ── selection: offer the nearest aircraft to the central picker ────
+    const unregister = registerPicker((px, py, rect, cam) => {
       const r2 = GLOBE_RADIUS * GLOBE_RADIUS;
       let bestHex: string | null = null;
       let bestD2 = PICK_RADIUS_PX * PICK_RADIUS_PX;
       for (let i = 0; i < activeCount; i++) {
         proj.fromArray(positions, i * 3);
         // silhouette-plane test: skip aircraft on the far side of the globe
-        if (proj.dot(camera.position) < r2) continue;
-        proj.project(camera);
+        if (proj.dot(cam.position) < r2) continue;
+        proj.project(cam);
         const sx = ((proj.x + 1) / 2) * rect.width;
         const sy = ((1 - proj.y) / 2) * rect.height;
         const d2 = (sx - px) * (sx - px) + (sy - py) * (sy - py);
@@ -153,15 +140,14 @@ export function AircraftLayer({ globe, store, selectedHex, onSelect }: Props) {
           bestHex = idxToHex[i]!;
         }
       }
-      onSelectRef.current(bestHex);
-    };
-    dom.addEventListener('pointerdown', onDown);
-    dom.addEventListener('pointerup', onUp);
+      if (bestHex === null) return null;
+      const hex = bestHex;
+      return { d2: bestD2, open: () => onSelectRef.current(hex) };
+    });
 
     return () => {
       cancelAnimationFrame(raf);
-      dom.removeEventListener('pointerdown', onDown);
-      dom.removeEventListener('pointerup', onUp);
+      unregister();
       scene.remove(mesh);
       scene.remove(halo);
       geometry.dispose();
@@ -172,61 +158,4 @@ export function AircraftLayer({ globe, store, selectedHex, onSelect }: Props) {
   }, [globe, store]);
 
   return null;
-}
-
-/** three-globe's polar→cartesian convention (verified against getCoords at mount). */
-function latLngToWorld(lat: number, lng: number, altUnits: number, out: THREE.Vector3): THREE.Vector3 {
-  const r = GLOBE_RADIUS * (1 + altUnits);
-  const phi = (90 - lat) * DEG;
-  const theta = (90 - lng) * DEG;
-  const sinPhi = Math.sin(phi);
-  return out.set(r * sinPhi * Math.cos(theta), r * Math.cos(phi), r * sinPhi * Math.sin(theta));
-}
-
-/**
- * Pack a TRS matrix directly into the instance buffer: basis Y = surface
- * normal, Z = track direction (geometry nose), X = their cross product.
- * All three are exactly orthonormal by construction — no normalization pass.
- */
-function writeMatrix(
-  out: Float32Array,
-  i: number,
-  pos: THREE.Vector3,
-  lat: number,
-  lon: number,
-  trackDeg: number,
-  scale: number,
-): void {
-  const len = pos.length();
-  const nx = pos.x / len;
-  const ny = pos.y / len;
-  const nz = pos.z / len;
-
-  // east/north tangent frame (degenerate at the exact poles; collector data
-  // there is effectively nonexistent)
-  const eLen = Math.hypot(nz, nx) || 1e-9;
-  const ex = nz / eLen;
-  const ez = -nx / eLen;
-  // north = n × east
-  const nox = -ny * ez;
-  const noy = nz * ez - nx * ex;
-  const noz = ny * ex;
-
-  const tr = trackDeg * DEG;
-  const st = Math.sin(tr);
-  const ct = Math.cos(tr);
-  // forward (Z axis) = east*sin(track) + north*cos(track)
-  const fx = ex * st + nox * ct;
-  const fy = noy * ct;
-  const fz = ez * st + noz * ct;
-  // X axis = n × forward
-  const xx = ny * fz - nz * fy;
-  const xy = nz * fx - nx * fz;
-  const xz = nx * fy - ny * fx;
-
-  const o = i * 16;
-  out[o] = xx * scale;      out[o + 1] = xy * scale;  out[o + 2] = xz * scale;  out[o + 3] = 0;
-  out[o + 4] = nx * scale;  out[o + 5] = ny * scale;  out[o + 6] = nz * scale;  out[o + 7] = 0;
-  out[o + 8] = fx * scale;  out[o + 9] = fy * scale;  out[o + 10] = fz * scale; out[o + 11] = 0;
-  out[o + 12] = pos.x;      out[o + 13] = pos.y;      out[o + 14] = pos.z;      out[o + 15] = 1;
 }

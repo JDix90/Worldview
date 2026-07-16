@@ -32,7 +32,17 @@ export interface WsMetaMsg {
   serverTimeMs: number;
 }
 
-export type WsServerMsg = WsSnapshotMsg | WsDeltaMsg | WsMetaMsg;
+/**
+ * Military-flagged aircraft (adsb.fi /v2/mil), sent whole on each collector
+ * poll — the set is small (hundreds), so no delta machinery.
+ */
+export interface WsMilMsg {
+  type: 'mil';
+  fetchedAt: number;
+  aircraft: AircraftState[];
+}
+
+export type WsServerMsg = WsSnapshotMsg | WsDeltaMsg | WsMetaMsg | WsMilMsg;
 
 /** Close code the server uses when the auth token is missing or wrong. */
 export const WS_CLOSE_UNAUTHORIZED = 1008;

@@ -13,6 +13,7 @@ import {
   type AircraftState,
   type GlobalSnapshot,
   type WsDeltaMsg,
+  type WsMilMsg,
   type WsSnapshotMsg,
 } from '@orrery/shared';
 import { computeDelta } from './delta.js';
@@ -20,12 +21,14 @@ import { log, logError } from './log.js';
 
 const POLL_MS = 3_000;
 
-type DeltaListener = (msg: WsDeltaMsg) => void;
+type DeltaListener = (msg: WsDeltaMsg | WsMilMsg) => void;
 
 export class SnapshotFeed {
   private byHex = new Map<string, AircraftState>();
   private fetchedAt = 0;
   private lastUpdatedAtMs = '';
+  private milFetchedAt = 0;
+  private milAircraft: AircraftState[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
   private listeners = new Set<DeltaListener>();
 
@@ -52,6 +55,11 @@ export class SnapshotFeed {
     return { type: 'snapshot', fetchedAt: this.fetchedAt, aircraft: [...this.byHex.values()] };
   }
 
+  /** Current military set for a newly connected client. */
+  milMsg(): WsMilMsg {
+    return { type: 'mil', fetchedAt: this.milFetchedAt, aircraft: this.milAircraft };
+  }
+
   snapshotFetchedAt(): number {
     return this.fetchedAt;
   }
@@ -66,6 +74,7 @@ export class SnapshotFeed {
   }
 
   private async check(): Promise<void> {
+    await this.checkMil();
     const updatedAtMs = await this.redis.hget(REDIS_KEYS.hotSnapshotMeta, 'updatedAtMs');
     if (!updatedAtMs || updatedAtMs === this.lastUpdatedAtMs) return;
 
@@ -90,5 +99,16 @@ export class SnapshotFeed {
       upsert: upsert.length,
       remove: remove.length,
     });
+  }
+
+  private async checkMil(): Promise<void> {
+    const raw = await this.redis.get(REDIS_KEYS.hotMil);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as { fetchedAt: number; aircraft: AircraftState[] };
+    if (parsed.fetchedAt === this.milFetchedAt) return;
+    this.milFetchedAt = parsed.fetchedAt;
+    this.milAircraft = parsed.aircraft;
+    const msg: WsMilMsg = { type: 'mil', fetchedAt: parsed.fetchedAt, aircraft: parsed.aircraft };
+    for (const fn of this.listeners) fn(msg);
   }
 }

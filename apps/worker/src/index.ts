@@ -11,6 +11,7 @@ import { log, logError } from './log.js';
 import {
   jobPollOpenSky,
   jobPollSquawks,
+  jobPollMil,
   jobSweepIntegrity,
   jobCleanRaw,
 } from './collector/jobs.js';
@@ -25,6 +26,7 @@ const SCHEDULES: Record<string, number> = {
   'poll-opensky': 90_000,
   'poll-squawks': 60_000,
   'sweep-integrity': 120_000,
+  'poll-mil': 120_000,
   'clean-raw': 15 * 60_000,
   'rollup-density': 5 * 60_000,
   'compute-baselines': 6 * 3600_000,
@@ -71,6 +73,8 @@ async function main(): Promise<void> {
           return jobPollSquawks(dataRedis);
         case 'sweep-integrity':
           return jobSweepIntegrity(dataRedis, pool);
+        case 'poll-mil':
+          return jobPollMil(dataRedis);
         case 'clean-raw':
           return jobCleanRaw();
         case 'rollup-density':

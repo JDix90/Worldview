@@ -31,7 +31,7 @@ async function main(): Promise<void> {
 
   const app = Fastify({ logger: false });
   await app.register(websocket);
-  registerApi(app, pool, feed);
+  registerApi(app, pool, feed, redis);
 
   // Liveness + snapshot staleness; unauthenticated by design (leaks only an age).
   app.get('/healthz', async () => {
@@ -54,6 +54,7 @@ async function main(): Promise<void> {
       clients.add(socket);
       log('ws', 'client connected', { clients: clients.size });
       socket.send(JSON.stringify(feed.snapshotMsg()));
+      socket.send(JSON.stringify(feed.milMsg()));
       socket.on('close', () => {
         clients.delete(socket);
         log('ws', 'client disconnected', { clients: clients.size });

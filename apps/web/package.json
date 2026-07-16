@@ -7,13 +7,15 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "verify:solar": "tsx scripts/verifySolar.ts"
+    "verify:solar": "tsx scripts/verifySolar.ts",
+    "verify:iss": "node scripts/verifyIss.mjs"
   },
   "dependencies": {
     "@orrery/shared": "workspace:*",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-globe.gl": "^2.37.0",
+    "satellite.js": "^5.0.0",
     "three": "^0.183.2"
   },
   "devDependencies": {

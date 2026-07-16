@@ -9,6 +9,11 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    // satellite.js is imported inside a module worker; without pre-bundling,
+    // mid-session dep discovery leaves the worker fetching a stale optimized
+    // hash (504 Outdated Optimize Dep → opaque worker error)
+    optimizeDeps: { include: ['satellite.js'] },
+    worker: { format: 'es' as const },
     // Baked into the local bundle by design: single-user instrument, dev-only
     // build, token never leaves this machine. Revisit at Phase 4 (off the desk).
     define: {

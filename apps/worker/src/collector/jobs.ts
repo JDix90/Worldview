@@ -6,10 +6,10 @@
  *  - clean-raw 15min   → enforce the 48h raw-file TTL
  */
 import type { Redis } from 'ioredis';
-import { EMERGENCY_SQUAWKS, GPS_WATCH_REGIONS, type AircraftState } from '@orrery/shared';
+import { EMERGENCY_SQUAWKS, GPS_WATCH_REGIONS, REDIS_KEYS, type AircraftState } from '@orrery/shared';
 import type { Queryable } from '../db.js';
 import { fetchGlobalSnapshot } from '../sources/opensky.js';
-import { fetchBySquawk, fetchRadius } from '../sources/adsbfi.js';
+import { fetchBySquawk, fetchRadius, fetchMil } from '../sources/adsbfi.js';
 import { writeSnapshot, writeSquawkState, writeIntegrityState } from './hotState.js';
 import { writeRaw, cleanRaw } from '../rawStore.js';
 import { log } from '../log.js';
@@ -36,6 +36,18 @@ export async function jobPollSquawks(redis: Redis): Promise<void> {
       });
     }
   }
+}
+
+/** Military-flagged aircraft (Phase 1.5 furniture layer — render-only). */
+export async function jobPollMil(redis: Redis): Promise<void> {
+  const { fetchedAt, aircraft, raw } = await fetchMil();
+  const airborne = aircraft.filter((a) => !a.onGround);
+  await redis.set(
+    REDIS_KEYS.hotMil,
+    JSON.stringify({ fetchedAt, aircraft: airborne }),
+  );
+  if (airborne.length > 0) await writeRaw('adsbfi', 'mil', raw);
+  log('adsbfi', 'mil poll', { airborne: airborne.length });
 }
 
 export async function jobSweepIntegrity(redis: Redis, db: Queryable): Promise<void> {
