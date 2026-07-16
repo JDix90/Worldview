@@ -64,9 +64,9 @@ Render-only layers behind a client layer registry ([registry.ts](apps/web/src/la
 | A3 Launches | Launch Library 2, client-direct | ✅ verified live — Starship Flight 13 card + T-minus correct |
 | A4 Sun & Moon | pure ephemeris (solar.ts + lunar.ts) | ✅ verified — markers placed correctly, `verify:lunar` passes |
 | B1 Aerosol/smoke | NASA GIBS AOD via WMS GetMap (one global image) | ✅ verified live — smoke-grey haze veils over the fire fields |
-| C Wind particles | GFS/ECMWF (OPeNDAP retired — spike first) | ⬜ not started (3–5 day project, built last) |
+| C Wind particles | Open-Meteo JSON (GFS-derived; GRIB2 template 5.3 avoided) | ✅ verified — flowing North Pacific streamlines, physics correct |
 
-**Perf:** 2.25 ms/frame with all Phase-A layers on — well under the 5 ms budget. **Done when** B + C ship and the owner eyeballs each; A is done modulo the FIRMS key.
+**Perf:** 1.41 ms/frame typical with all layers on (wind, fires, aerosol, satellites, …); 4.24 ms worst-case zoomed into the fire overdraw — both under the 5 ms budget. **Phase 1.5b complete: all six second-wave layers built and verified.** Owner eyeball pass on the composite is the remaining courtesy gate.
 
 ## Phases 2+ — sketches only (one paragraph each, contingent on the gate)
 

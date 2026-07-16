@@ -13,6 +13,7 @@ import { wildfiresLayer } from './wildfires';
 import { launchesLayer } from './launches';
 import { sunMoonLayer } from './sunmoon';
 import { aerosolLayer } from './aerosol';
+import { windLayer } from './wind/wind';
 
 export function buildLayerDefs(deps: { milStore: AircraftStore }): LayerDef[] {
   return [
@@ -36,6 +37,7 @@ export function buildLayerDefs(deps: { milStore: AircraftStore }): LayerDef[] {
       maxInstances: 9000,
     }),
     makeMilLayer(deps.milStore),
+    windLayer,
     cyclonesLayer,
     wildfiresLayer,
     aerosolLayer,

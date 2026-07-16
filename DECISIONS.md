@@ -148,6 +148,14 @@ Running log. Every non-obvious choice gets a line: what was decided, why, what w
 
 61. **AOD magnitude derives from `r − g`, not `max(r,g,b)`; recolored to smoke-grey.** GIBS renders low AOD as *yellow* (max-channel ≈ 1), so an intensity threshold washed the whole globe and competed with the amber fires. The colormap runs yellow→orange→red, so `(r − g)` orders aerosol low→high monotonically. Then recolored to a desaturated warm-grey→off-white haze — deliberately un-amber so it reads as an atmospheric layer distinct from fire/aircraft marks. Result: smoke veils over the fire fields and China, the pairing the owner asked for. Perf 4.24ms/frame all-layers (fires still dominate; the aerosol sphere is ~free).
 
+## 2026-07-16 — Phase C (wind particles) — the crown jewel
+
+62. **Wind source: Open-Meteo JSON, not GFS GRIB2 — decided by the C0 spike, not preference.** The spike inspected a live NOMADS GFS 10m u/v file: data-representation **template 5.3 (complex packing + spatial differencing)**, the hardest common GRIB2 encoding — a correct pure-JS decoder is high-effort/high-risk and the WASM alternative (gribberish) is the class that burned us with satellite.js v7. Open-Meteo serves the *same GFS data* as CORS-open JSON. Since particle-advection beauty comes from bilinear interpolation + density, not raw grid resolution, JSON is the *right* call, not a downgrade. NOMADS grib_filter DID survive OPeNDAP's retirement (#56) — noted for a future feeder-grade upgrade, not used now.
+
+63. **10° single-request grid, cached 6h.** Open-Meteo rate-limits by *location count*, so a fine multi-request grid 429s (learned live — my own spike testing exhausted the window). A 10° grid is 612 points in ONE lightweight request, cached in localStorage (6h TTL, stale-serve on failure like the TLE/launch layers). Physics verified: Southern Ocean −50° shows mean u=+2.1 m/s (eastward roaring-forties westerlies); equatorial Pacific reads easterly. Coarse grid + advection still reads as smooth flow.
+
+64. **Renderer: 6,000 particles, 14-point world-space trails as additive LineSegments**, bright head → faint tail, deep-cyan → white by speed, at r≈100.45 (below aircraft). Client-only — no worker/server touch, so the flight soak stayed pristine through all of Phase C. Tuning lesson: the first pass had sub-pixel trails (invisible); SPEED 0.10→0.55 and TRAIL_LEN 6→14 gave visible streamlines (verified: 123k cyan pixels in the native buffer, flowing North Pacific field on zoom-in — the far-out downscaled screenshot washes thin additive lines out). Negligible perf cost: 1.41ms/frame all-layers typical, 4.24ms worst-case (zoomed into the fire overdraw), both under the 5ms gate.
+
 ### Assumptions pending owner confirmation
 
 - OpenSky registered account + API client will be created by the owner; credentials into `.env`. **Blocks the collector chunk.**
