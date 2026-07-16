@@ -1,7 +1,14 @@
 /**
  * CelesTrak GP element sets (TLE format), client-direct (keyless, CORS-open).
- * Etiquette: 6h cache. Small curated groups persist in localStorage; bulky
- * groups (Starlink ~1.7MB) cache in memory only to spare the quota.
+ *
+ * Caching is durable via IndexedDB, NOT localStorage: the Starlink group is
+ * ~1.9MB and blows localStorage's ~5MB quota once combined with other groups,
+ * so localStorage writes silently failed and every reload re-fetched. CelesTrak
+ * answers a re-fetch inside its 2-hour refresh window with an HTTP 403 whose
+ * body is "GP data has not updated since your last successful download" — a
+ * bandwidth-saver, not a failure. We honor it: on any fetch error we serve the
+ * cached copy (stale TLEs propagate fine for a day), and the 12h TTL keeps us
+ * from ever hammering inside CelesTrak's window once a group is cached.
  */
 
 export interface Tle {
@@ -15,8 +22,48 @@ export interface Tle {
 }
 
 const BASE = 'https://celestrak.org/NORAD/elements/gp.php';
-const CACHE_TTL_MS = 6 * 3600_000;
+const CACHE_TTL_MS = 12 * 3600_000;
 const memoryCache = new Map<string, { fetchedAt: number; text: string }>();
+
+// ── IndexedDB key/value (one store, keyed by group) ───────────────────
+const DB_NAME = 'orrery';
+const STORE = 'tle';
+type CacheEntry = { fetchedAt: number; text: string };
+
+function openDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbGet(group: string): Promise<CacheEntry | null> {
+  try {
+    const db = await openDb();
+    return await new Promise((resolve, reject) => {
+      const req = db.transaction(STORE, 'readonly').objectStore(STORE).get(group);
+      req.onsuccess = () => resolve((req.result as CacheEntry | undefined) ?? null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function idbSet(group: string, entry: CacheEntry): Promise<void> {
+  try {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const req = db.transaction(STORE, 'readwrite').objectStore(STORE).put(entry, group);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    /* private-mode / quota — memory cache still covers this session */
+  }
+}
 
 function parseTleText(text: string, group: string): Tle[] {
   const lines = text.split('\n').map((l) => l.trimEnd()).filter((l) => l.length > 0);
@@ -39,42 +86,40 @@ function parseTleText(text: string, group: string): Tle[] {
   return out;
 }
 
-function readStorageCache(group: string): { fetchedAt: number; text: string } | null {
-  try {
-    const raw = localStorage.getItem(`orrery:tle:${group}`);
-    return raw ? (JSON.parse(raw) as { fetchedAt: number; text: string }) : null;
-  } catch {
-    return null;
-  }
-}
-
 async function fetchGroupText(group: string): Promise<string> {
   const now = Date.now();
 
   const mem = memoryCache.get(group);
   if (mem && now - mem.fetchedAt < CACHE_TTL_MS) return mem.text;
-  const stored = readStorageCache(group);
-  if (stored && now - stored.fetchedAt < CACHE_TTL_MS) return stored.text;
+
+  const cached = await idbGet(group);
+  if (cached && now - cached.fetchedAt < CACHE_TTL_MS) {
+    memoryCache.set(group, cached);
+    return cached.text;
+  }
 
   try {
     const res = await fetch(`${BASE}?GROUP=${encodeURIComponent(group)}&FORMAT=tle`);
-    if (!res.ok) throw new Error(`CelesTrak ${group}: HTTP ${res.status}`);
-    const text = await res.text();
-    memoryCache.set(group, { fetchedAt: now, text });
-    try {
-      localStorage.setItem(`orrery:tle:${group}`, JSON.stringify({ fetchedAt: now, text }));
-    } catch {
-      /* quota exceeded (starlink is ~1.7MB) — memory cache still holds it */
+    // CelesTrak's "not updated" reply is 403 with a short text body, not TLEs.
+    // Treat any non-2xx (or a suspiciously tiny body) as "keep the cache".
+    const text = res.ok ? await res.text() : '';
+    if (!res.ok || text.length < 200 || text.startsWith('GP data')) {
+      throw new Error(`CelesTrak ${group}: HTTP ${res.status} (no fresh data)`);
     }
+    const entry = { fetchedAt: now, text };
+    memoryCache.set(group, entry);
+    void idbSet(group, entry);
     return text;
   } catch (err) {
-    // CelesTrak throttles aggressive clients (403) — a stale element set is
-    // far better than an empty sky; TLEs stay usable for days
-    const fallback = stored ?? memoryCache.get(group) ?? null;
+    // Serve the last good copy, however old — stale elements still propagate.
+    const fallback = cached ?? mem ?? null;
     if (fallback) {
-      console.warn(`[satellites] ${group}: fetch failed, using stale cache`, err);
+      console.warn(`[satellites] ${group}: using cached TLEs (fetch unavailable)`, err);
       return fallback.text;
     }
+    // Cold start inside CelesTrak's refresh window with no cache anywhere: the
+    // only real dead end. Surfaces as an empty group until the window passes.
+    console.warn(`[satellites] ${group}: no data yet (CelesTrak refresh pending)`, err);
     throw err;
   }
 }
@@ -91,8 +136,8 @@ export async function fetchTles(groups: string[]): Promise<Tle[]> {
           out.push(tle);
         }
       }
-    } catch (err) {
-      console.warn(`[satellites] group ${group} failed`, err);
+    } catch {
+      /* group unavailable this cycle — others still render */
     }
   }
   return out;

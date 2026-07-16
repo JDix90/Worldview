@@ -40,15 +40,19 @@ const fragmentShader = /* glsl */ `
     vec2 uv = vec2((lng + PI) / (2.0 * PI), (lat + PI * 0.5) / PI);
 
     float p = texture2D(auroraMap, uv).r;      // probability 0..1
-    float night = smoothstep(0.15, -0.1, dot(n, sunDir));
-    float a = p * night;
-    if (a < 0.01) discard;
+    // full glow through late twilight, so the oval isn't a thin sliver at the limb
+    float night = smoothstep(0.20, -0.05, dot(n, sunDir));
+    // pow<1 lifts the faint majority of the oval into visibility; the bright
+    // core still dominates
+    float glow = pow(p, 0.65) * night;
+    if (glow < 0.015) discard;
 
     // green core shading into violet at the faint edges
-    vec3 green = vec3(0.25, 1.0, 0.55);
-    vec3 violet = vec3(0.55, 0.3, 0.9);
+    vec3 green = vec3(0.30, 1.0, 0.55);
+    vec3 violet = vec3(0.55, 0.32, 0.95);
     vec3 col = mix(violet, green, smoothstep(0.1, 0.7, p));
-    gl_FragColor = vec4(col * a * 0.85, a * 0.7);
+    // additive blend: RGB is what reads over the night-lights texture
+    gl_FragColor = vec4(col * glow * 2.4, glow);
   }
 `;
 
@@ -94,7 +98,7 @@ export const auroraLayer: LayerDef = {
           const y = Math.round(90 - lat);
           if (x < 0 || x > 359 || y < 0 || y > 180) continue;
           const o = (y * 360 + x) * 4;
-          const v = Math.min(255, Math.round((prob / 100) * 255 * 2.2)); // gain: probabilities are conservative
+          const v = Math.min(255, Math.round((prob / 100) * 255 * 3.0)); // gain: OVATION probabilities are conservative
           img.data[o] = v;
           img.data[o + 1] = v;
           img.data[o + 2] = v;
