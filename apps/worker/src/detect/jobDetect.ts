@@ -87,6 +87,7 @@ export async function jobDetect(redis: Redis, db: Queryable): Promise<void> {
         byHex.set(a.hex, {
           hex: a.hex, lat: a.lat, lon: a.lon, callsign: a.callsign,
           seenAt: a.seenAt, onGround: a.onGround,
+          srcOpenSky: true,
         });
       }
     }
@@ -94,7 +95,12 @@ export async function jobDetect(redis: Redis, db: Queryable): Promise<void> {
     if (targeted) {
       const parsed = JSON.parse(targeted) as { fetchedAt: number; aircraft: (SquawkSighting & { onGround?: boolean })[] };
       if (nowS - parsed.fetchedAt < 180) {
-        for (const a of parsed.aircraft) byHex.set(a.hex, a); // adsb.fi wins on conflict
+        for (const a of parsed.aircraft) {
+          // adsb.fi data wins on conflict, but source flags MERGE — an
+          // aircraft seen by both networks this cycle is corroborated
+          const prev = byHex.get(a.hex);
+          byHex.set(a.hex, { ...a, srcAdsbfi: true, srcOpenSky: prev?.srcOpenSky === true });
+        }
       }
     }
     bySquawk[code] = [...byHex.values()];

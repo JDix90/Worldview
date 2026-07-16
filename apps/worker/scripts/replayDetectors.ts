@@ -114,13 +114,26 @@ check('coverage drop: D1 suppressed — zero events despite 45% cell drops', g.e
 
 // ── 4. squawk persistence against a real aircraft ─────────────────────
 const anyAirborne = (rawStates.states ?? []).find((s) => s[8] === false && typeof s[6] === 'number')!;
-const hijack = { hex: String(anyAirborne[0]), lat: anyAirborne[6] as number, lon: anyAirborne[5] as number, seenAt: T0 };
+const hijack = {
+  hex: String(anyAirborne[0]), lat: anyAirborne[6] as number, lon: anyAirborne[5] as number,
+  seenAt: T0, srcOpenSky: true, srcAdsbfi: true, // corroborated by both networks
+};
 let q = detectSquawks(T0, { '7500': [hijack], '7600': [], '7700': [] }, { entries: {} } as D2State);
 q = detectSquawks(T0 + 60, { '7500': [hijack], '7600': [], '7700': [] }, q.state);
-check('squawk: same observation seen by two cycles → no S1', q.events.length === 0);
+check('squawk: same observation seen by two cycles → nothing', q.events.length === 0);
 q = detectSquawks(T0 + 120, { '7500': [{ ...hijack, seenAt: T0 + 100 }], '7600': [], '7700': [] }, q.state);
-check('squawk: genuinely new observation → S1 candidate fires',
+check('squawk: 2nd independent observation → S2 tier (below corroborated-S1 bar)',
+  q.events.some((e) => e.kind === 'squawk_7500' && e.severity === 'S2'));
+q = detectSquawks(T0 + 240, { '7500': [{ ...hijack, seenAt: T0 + 220 }], '7600': [], '7700': [] }, q.state);
+check('squawk: corroborated, 3 obs over 3+ min → S1 fires (DECISIONS #52)',
   q.events.some((e) => e.kind === 'squawk_7500' && e.severity === 'S1'));
+// same persistence but single-network: the aggregator-cache failure mode → S2 only
+const solo = { ...hijack, srcOpenSky: false, srcAdsbfi: true };
+let sq = detectSquawks(T0, { '7500': [solo], '7600': [], '7700': [] }, { entries: {} } as D2State);
+sq = detectSquawks(T0 + 120, { '7500': [{ ...solo, seenAt: T0 + 110 }], '7600': [], '7700': [] }, sq.state);
+sq = detectSquawks(T0 + 240, { '7500': [{ ...solo, seenAt: T0 + 220 }], '7600': [], '7700': [] }, sq.state);
+check('squawk: single-network cache artifact, same persistence → never S1',
+  !sq.events.some((e) => e.severity === 'S1'));
 
 // ── 5. GPS interference from a recorded Baltic sweep ──────────────────
 const balticFile = newestRaw(path.join(RAW_ROOT, 'adsbfi'), 'integrity-baltic');

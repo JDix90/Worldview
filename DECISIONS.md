@@ -122,6 +122,10 @@ Running log. Every non-obvious choice gets a line: what was decided, why, what w
 
 51. **Zoom ceiling 480 → 720** ("space band") so GEO is visible; inner zoom curve untouched. Owner re-verification of feel at the outer band pending (the one human gate in Phase 1.5).
 
+## 2026-07-16 — first shadow-calibration amendment
+
+52. **7500 → S1 now requires cross-network corroboration (amends #4; owner-ratified).** Day-one shadow data: ~12 distinct aircraft/day flagged as "persistent 7500" against a design bar of <1 S1/week — all single-network, clustered over US coverage. Root cause: aggregator caches update `seenAt` on any message (mostly position) while a stale/garbled squawk value lingers, so the independent-observation persistence test passes trivially. New rule: **S1 only when BOTH OpenSky and adsb.fi report the squawk within the window, across ≥3 independent observations spanning ≥3 minutes** — a cache artifact lives in one aggregator; a real hijack transponder shows in both. Uncorroborated or shorter persistence (≥2 obs) → S2 feed. Distinct dedupe keys so S2→S1 escalation isn't latch-suppressed. Side benefit: cuts analyst triage spend (~12/day × ~$0.04 was tracking past the $10/mo cap). The downgrade risk — a real hijack in single-network coverage pages as S2 not S1 — is accepted during calibration; push is shadowed anyway. Verified: 4 new regression scenarios in verify:detectors + verify:replay. *Also noteworthy: the containment layers worked exactly as designed while the rule was wrong — cap demoted after 3, analyst triaged the rest to noise/unexplained-low, and only 1 signal would have actually pushed.*
+
 ### Assumptions pending owner confirmation
 
 - OpenSky registered account + API client will be created by the owner; credentials into `.env`. **Blocks the collector chunk.**

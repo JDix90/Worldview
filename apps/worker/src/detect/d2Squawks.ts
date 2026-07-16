@@ -2,8 +2,17 @@
  * D2 — emergency squawks (FOUNDATION §7, DECISIONS #4). Baseline-free, runs
  * from day one. Pure function over (sightings, prior state):
  *
- *  7500 (hijack)        → S1 only after 2+ consecutive cycles — fat-fingered
- *                          transponders outnumber hijackings; ~2 min latency accepted
+ *  7500 (hijack)        → graduated (DECISIONS #52, calibration find of
+ *                          2026-07-16: ~12 false S1s/day from aggregator-cache
+ *                          staleness — seenAt advances on position messages
+ *                          while a stale squawk value lingers in one network's
+ *                          cache):
+ *                            S1 only when CORROBORATED — seen by BOTH OpenSky
+ *                            and adsb.fi within the window, across ≥3
+ *                            independent observations spanning ≥3 minutes.
+ *                            A cache artifact lives in one aggregator; a real
+ *                            hijack transponder shows in both.
+ *                            Uncorroborated/shorter persistence (≥2 obs) → S2.
  *  7600 (radio failure) → S3 on first sight
  *  7700 (emergency)     → S3 on first sight; 2+ aircraft within 500 km inside
  *                          30 min is a cluster → S2 (that's when it stops being
@@ -23,6 +32,9 @@ export interface SquawkSighting {
   callsign?: string;
   seenAt: number;
   onGround?: boolean;
+  /** Which networks reported this sighting THIS cycle (jobDetect merge sets these). */
+  srcOpenSky?: boolean;
+  srcAdsbfi?: boolean;
 }
 
 interface TrackedSquawk {
@@ -38,6 +50,11 @@ interface TrackedSquawk {
   cycles: number;
   /** seenAt of the newest observation counted into `cycles`. */
   lastDataS: number;
+  /** seenAt of the first observation in this persistence window. */
+  firstDataS: number;
+  /** Networks that reported this squawk at any point in the window. */
+  seenOpenSky: boolean;
+  seenAdsbfi: boolean;
   lat: number;
   lon: number;
   callsign?: string;
@@ -60,8 +77,12 @@ export interface D2Event {
 
 /** A cycle gap longer than this breaks "consecutive". */
 const CONSECUTIVE_GAP_S = 150;
-/** 7500 must persist this many cycles before it's an S1 candidate. */
-const HIJACK_MIN_CYCLES = 2;
+/** 7500 must persist this many observations before it emits at all (S2). */
+const HIJACK_MIN_OBS = 2;
+/** S1 additionally requires this many observations spanning this much data time… */
+const HIJACK_S1_OBS = 3;
+const HIJACK_S1_SPAN_S = 180;
+/** …and corroboration by BOTH networks (see header). */
 const ENTRY_TTL_S = 1800;
 const CLUSTER_RADIUS_KM = 500;
 
@@ -98,6 +119,9 @@ export function detectSquawks(
         lastS: nowS,
         cycles: consecutive ? prev.cycles + (newObservation ? 1 : 0) : 1,
         lastDataS: consecutive ? Math.max(prev.lastDataS, s.seenAt) : s.seenAt,
+        firstDataS: consecutive ? prev.firstDataS : s.seenAt,
+        seenOpenSky: (consecutive && prev.seenOpenSky) || s.srcOpenSky === true,
+        seenAdsbfi: (consecutive && prev.seenAdsbfi) || s.srcAdsbfi === true,
         lat: s.lat,
         lon: s.lon,
         callsign: s.callsign ?? prev?.callsign,
@@ -105,17 +129,33 @@ export function detectSquawks(
       const e = entries[key];
       const label = e.callsign ?? s.hex;
 
-      if (code === '7500' && e.cycles >= HIJACK_MIN_CYCLES) {
-        events.push({
-          kind: 'squawk_7500',
-          severity: 'S1',
-          hexes: [s.hex],
-          lat: s.lat,
-          lon: s.lon,
-          what: `${label} squawking 7500 (unlawful interference), persistent across ${e.cycles} cycles.`,
-          confidence: Math.min(0.95, 0.6 + 0.15 * (e.cycles - HIJACK_MIN_CYCLES)),
-          dedupeKey: `d2:7500:${s.hex}`,
-        });
+      if (code === '7500' && e.cycles >= HIJACK_MIN_OBS) {
+        const spanS = e.lastDataS - e.firstDataS;
+        const corroborated = e.seenOpenSky && e.seenAdsbfi;
+        const spanMin = Math.max(1, Math.round(spanS / 60));
+        if (corroborated && e.cycles >= HIJACK_S1_OBS && spanS >= HIJACK_S1_SPAN_S) {
+          events.push({
+            kind: 'squawk_7500',
+            severity: 'S1',
+            hexes: [s.hex],
+            lat: s.lat,
+            lon: s.lon,
+            what: `${label} squawking 7500 (unlawful interference) — corroborated by both networks, ${e.cycles} observations over ${spanMin} min.`,
+            confidence: Math.min(0.95, 0.75 + 0.05 * (e.cycles - HIJACK_S1_OBS)),
+            dedupeKey: `d2:7500:${s.hex}:s1`, // distinct from the S2 latch so escalation isn't suppressed
+          });
+        } else {
+          events.push({
+            kind: 'squawk_7500',
+            severity: 'S2',
+            hexes: [s.hex],
+            lat: s.lat,
+            lon: s.lon,
+            what: `${label} squawking 7500 (unlawful interference), ${e.cycles} observation(s)${corroborated ? '' : ', single network'} — below the corroborated-S1 bar, watching.`,
+            confidence: 0.5,
+            dedupeKey: `d2:7500:${s.hex}`,
+          });
+        }
       } else if (code === '7600') {
         events.push({
           kind: 'squawk_7600',

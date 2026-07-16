@@ -39,9 +39,31 @@ const empty: D2State = { entries: {} };
 const hijack = { hex: 'abc123', lat: 50, lon: 10, callsign: 'TST001', seenAt: NOW };
 
 const c1 = detectSquawks(NOW, { '7500': [hijack], '7600': [], '7700': [] }, empty);
-check('D2 7500 first cycle → no S1 yet', c1.events.length === 0);
+check('D2 7500 first cycle → nothing yet', c1.events.length === 0);
 const c2 = detectSquawks(NOW + 60, { '7500': [{ ...hijack, seenAt: NOW + 60 }], '7600': [], '7700': [] }, c1.state);
-check('D2 7500 second consecutive cycle → S1', c2.events.some((e) => e.kind === 'squawk_7500' && e.severity === 'S1'));
+check('D2 7500 second observation, single network → S2 (not S1)',
+  c2.events.some((e) => e.kind === 'squawk_7500' && e.severity === 'S2') &&
+  !c2.events.some((e) => e.severity === 'S1'));
+
+// DECISIONS #52 corroboration rule: S1 needs BOTH networks + ≥3 obs over ≥3 min
+const both = { ...hijack, srcOpenSky: true, srcAdsbfi: true };
+let cor = detectSquawks(NOW, { '7500': [both], '7600': [], '7700': [] }, empty);
+cor = detectSquawks(NOW + 90, { '7500': [{ ...both, seenAt: NOW + 90 }], '7600': [], '7700': [] }, cor.state);
+cor = detectSquawks(NOW + 190, { '7500': [{ ...both, seenAt: NOW + 190 }], '7600': [], '7700': [] }, cor.state);
+check('D2 corroborated 7500, 3 obs over 3+ min → S1',
+  cor.events.some((e) => e.kind === 'squawk_7500' && e.severity === 'S1'));
+// same cadence, single network → stays S2
+const solo = { ...hijack, srcAdsbfi: true };
+let un = detectSquawks(NOW, { '7500': [solo], '7600': [], '7700': [] }, empty);
+un = detectSquawks(NOW + 90, { '7500': [{ ...solo, seenAt: NOW + 90 }], '7600': [], '7700': [] }, un.state);
+un = detectSquawks(NOW + 190, { '7500': [{ ...solo, seenAt: NOW + 190 }], '7600': [], '7700': [] }, un.state);
+check('D2 single-network 7500, same persistence → S2 only',
+  un.events.some((e) => e.severity === 'S2') && !un.events.some((e) => e.severity === 'S1'));
+// corroborated but short span (<3 min) → still S2
+let short = detectSquawks(NOW, { '7500': [both], '7600': [], '7700': [] }, empty);
+short = detectSquawks(NOW + 50, { '7500': [{ ...both, seenAt: NOW + 50 }], '7600': [], '7700': [] }, short.state);
+short = detectSquawks(NOW + 100, { '7500': [{ ...both, seenAt: NOW + 100 }], '7600': [], '7700': [] }, short.state);
+check('D2 corroborated but <3 min span → still S2', !short.events.some((e) => e.severity === 'S1'));
 
 const gap = detectSquawks(NOW + 600, { '7500': [{ ...hijack, seenAt: NOW + 600 }], '7600': [], '7700': [] }, c1.state);
 check('D2 10-min gap breaks persistence → no S1', gap.events.length === 0);
@@ -51,7 +73,7 @@ check('D2 10-min gap breaks persistence → no S1', gap.events.length === 0);
 const sameObs = detectSquawks(NOW + 60, { '7500': [hijack], '7600': [], '7700': [] }, c1.state);
 check('D2 same observation across two cycles → still no S1', sameObs.events.length === 0);
 const thenNew = detectSquawks(NOW + 120, { '7500': [{ ...hijack, seenAt: NOW + 100 }], '7600': [], '7700': [] }, sameObs.state);
-check('D2 then a genuinely new observation → S1', thenNew.events.some((e) => e.kind === 'squawk_7500'));
+check('D2 then a genuinely new observation → emits (S2 tier)', thenNew.events.some((e) => e.kind === 'squawk_7500'));
 
 // regression: ramp transponder tests must be invisible to D2
 const ground = detectSquawks(NOW, { '7500': [{ ...hijack, onGround: true }], '7600': [], '7700': [] }, empty);
