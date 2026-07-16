@@ -68,6 +68,20 @@ Render-only layers behind a client layer registry ([registry.ts](apps/web/src/la
 
 **Perf:** 1.41 ms/frame typical with all layers on (wind, fires, aerosol, satellites, …); 4.24 ms worst-case zoomed into the fire overdraw — both under the 5 ms budget. **Phase 1.5b complete: all six second-wave layers built and verified.** Owner eyeball pass on the composite is the remaining courtesy gate.
 
+## Phase 1.5c — UX polish from living with it (2026-07-16, DECISIONS #65–67)
+
+Owner feedback after the composite shipped: spin frustration, flight clutter, close-zoom blur.
+
+| Item | What shipped | Status |
+|---|---|---|
+| SPIN pause chip | persisted pref; drag-resume can't override a manual pause | ✅ verified incl. timer race |
+| CIVIL AIR toggle | flag-only LayerDef; store purge/smoothing continue while hidden | ✅ verified on/off/persist |
+| 8K textures | NASA Blue Marble NG + Black Marble 2016 + GEBCO topo; shader texel/anisotropy made resolution-independent | ✅ zoom floor crisp (Sierra Nevada test) |
+| BORDERS layer | Natural Earth 50m vector hairlines, slerp-subdivided, distance-faded | ✅ verified incl. antimeridian |
+| Aerosol close-zoom fade | AOD veil fades out under camDist ~210 | ✅ verified over Siberia |
+
+Perf all-on at the fire worst case: 3.1 ms — under the 5 ms gate.
+
 ## Phases 2+ — sketches only (one paragraph each, contingent on the gate)
 
 **Phase 2 — Second layer.** Add one more collector through the existing seams — candidate chosen *at the time* by what Phase 1 taught us (likely candidates: earthquakes/USGS for its clean feed, or weather overlay for globe beauty; but the gate review decides). The test of the architecture: a new source should be an adapter, a baseline config, and detectors — no changes to stages' contracts. Real NOTAM integration for the analyst belongs here if the traffic-collapse detector proved useful.

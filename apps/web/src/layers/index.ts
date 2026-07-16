@@ -14,6 +14,7 @@ import { launchesLayer } from './launches';
 import { sunMoonLayer } from './sunmoon';
 import { aerosolLayer } from './aerosol';
 import { windLayer } from './wind/wind';
+import { bordersLayer } from './borders';
 
 export function buildLayerDefs(deps: { milStore: AircraftStore }): LayerDef[] {
   return [
@@ -56,5 +57,6 @@ export function buildLayerDefs(deps: { milStore: AircraftStore }): LayerDef[] {
     jammingLayer,
     auroraLayer,
     sunMoonLayer,
+    bordersLayer,
   ];
 }

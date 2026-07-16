@@ -126,6 +126,13 @@ export const aerosolLayer: LayerDef = {
     const timer = setInterval(refresh, REFRESH_MS);
 
     return {
+      update(_nowMs, camDist) {
+        // The daily AOD grid is coarse (~10px cells at the zoom floor) —
+        // fade the veil out as the camera closes in so it never smears the
+        // now-sharp surface; full strength by ~2× globe radius out.
+        const t = THREE.MathUtils.clamp((camDist - 130) / (210 - 130), 0, 1);
+        material.uniforms.uOpacity!.value = 0.62 * t;
+      },
       dispose() {
         clearInterval(timer);
         ctx.scene.remove(mesh);
