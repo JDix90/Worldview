@@ -1,0 +1,135 @@
+/**
+ * Internal HTTP API (bearer auth): baseline queries and rollup status.
+ * Read-only — the worker owns all writes. Chunk 4's "small internal API".
+ */
+import type { FastifyInstance } from 'fastify';
+import type pg from 'pg';
+import { daytypeOf, maturityOf, type BaselineEntry, type Daytype } from '@orrery/shared';
+import { env } from './env.js';
+import type { SnapshotFeed } from './snapshotFeed.js';
+
+const CELL_RE = /^[NS]\d{2}[EW]\d{3}$/;
+
+interface BaselineRow {
+  cell: string;
+  hour: number;
+  daytype: Daytype;
+  median: number;
+  mad: number;
+  samples: number;
+  days: number;
+}
+
+function toEntry(r: BaselineRow): BaselineEntry {
+  return { ...r, maturity: maturityOf(r.days, r.daytype) };
+}
+
+export function registerApi(app: FastifyInstance, pool: pg.Pool, feed: SnapshotFeed): void {
+  app.register(async (scope) => {
+    scope.addHook('preHandler', async (req, reply) => {
+      if (req.headers.authorization !== `Bearer ${env.authToken}`) {
+        return reply.code(401).send({ error: 'unauthorized' });
+      }
+    });
+
+    scope.get<{ Querystring: { limit?: string; severity?: string } }>(
+      '/api/signals',
+      async (req) => {
+        const limit = Math.min(Number(req.query.limit ?? 50) || 50, 200);
+        const severity = req.query.severity;
+        const where = severity ? 'WHERE s.severity = $2' : '';
+        const params: unknown[] = severity ? [limit, severity] : [limit];
+        const { rows } = await pool.query(
+          `SELECT s.payload,
+                  CASE WHEN a.signal_id IS NULL THEN NULL ELSE
+                    jsonb_build_object(
+                      'disposition', a.disposition, 'severity_final', a.severity_final,
+                      'narrative', a.narrative, 'sources_consulted', a.sources,
+                      'confidence', a.confidence)
+                  END AS assessment
+           FROM signal s LEFT JOIN assessment a ON a.signal_id = s.id
+           ${where} ORDER BY s.ts DESC LIMIT $1`,
+          params,
+        );
+        return { signals: rows.map((r) => ({ ...r.payload, assessment: r.assessment })) };
+      },
+    );
+
+    scope.get<{ Querystring: { limit?: string } }>('/api/briefings', async (req) => {
+      const limit = Math.min(Number(req.query.limit ?? 7) || 7, 60);
+      const { rows } = await pool.query(
+        `SELECT id, date_local, ts, body_md, quiet FROM briefing ORDER BY date_local DESC LIMIT $1`,
+        [limit],
+      );
+      return { briefings: rows };
+    });
+
+    scope.get('/api/shadow-log', async () => {
+      const { rows } = await pool.query(
+        `SELECT id, ts, signal, assessment, would_send, pushed
+         FROM shadow_push ORDER BY ts DESC LIMIT 100`,
+      );
+      return { entries: rows };
+    });
+
+    scope.get('/api/analyst/usage', async () => {
+      const { rows } = await pool.query(
+        `SELECT coalesce(sum(est_cost_usd), 0)::float8 AS mtd_usd,
+                count(*)::int AS calls,
+                coalesce(sum(web_searches), 0)::int AS searches
+         FROM analyst_usage WHERE ts >= date_trunc('month', now())`,
+      );
+      return { monthToDate: rows[0] };
+    });
+
+    scope.get('/api/rollups/status', async () => {
+      const latest = await pool.query(
+        `SELECT bucket_ts, total_aircraft, cells FROM rollup_run ORDER BY bucket_ts DESC LIMIT 1`,
+      );
+      const day = await pool.query(
+        `SELECT count(*)::int AS buckets FROM rollup_run WHERE bucket_ts >= now() - interval '24 hours'`,
+      );
+      const bins = await pool.query(`SELECT count(*)::int AS bins FROM baseline`);
+      const run = latest.rows[0];
+      return {
+        latestBucket: run?.bucket_ts ?? null,
+        latestTotalAircraft: run?.total_aircraft ?? null,
+        latestCells: run?.cells ?? null,
+        bucketsLast24h: day.rows[0].buckets,
+        baselineBins: bins.rows[0].bins,
+      };
+    });
+
+    scope.get<{ Params: { cell: string } }>('/api/baseline/:cell', async (req, reply) => {
+      const { cell } = req.params;
+      if (!CELL_RE.test(cell)) return reply.code(400).send({ error: 'bad cell id' });
+      const { rows } = await pool.query<BaselineRow>(
+        `SELECT cell, hour, daytype, median, mad, samples, days
+         FROM baseline WHERE cell = $1 ORDER BY daytype, hour`,
+        [cell],
+      );
+      return { cell, entries: rows.map(toEntry) };
+    });
+
+    scope.get<{ Params: { cell: string } }>('/api/baseline/:cell/now', async (req, reply) => {
+      const { cell } = req.params;
+      if (!CELL_RE.test(cell)) return reply.code(400).send({ error: 'bad cell id' });
+      const now = new Date();
+      const hour = now.getUTCHours();
+      const daytype = daytypeOf(now);
+      const { rows } = await pool.query<BaselineRow>(
+        `SELECT cell, hour, daytype, median, mad, samples, days
+         FROM baseline WHERE cell = $1 AND hour = $2 AND daytype = $3`,
+        [cell, hour, daytype],
+      );
+      return {
+        cell,
+        hour,
+        daytype,
+        observed: feed.countInCell(cell),
+        snapshotFetchedAt: feed.snapshotFetchedAt(),
+        baseline: rows[0] ? toEntry(rows[0]) : null,
+      };
+    });
+  });
+}

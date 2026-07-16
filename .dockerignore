@@ -1,0 +1,9 @@
+node_modules
+**/node_modules
+data
+.env
+.git
+.claude
+dist
+**/dist
+apps/web/public/textures

@@ -1,0 +1,26 @@
+{
+  "name": "@orrery/server",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "verify:delta": "tsx scripts/verifyDelta.ts",
+    "verify:ws": "tsx scripts/verifyWs.ts"
+  },
+  "dependencies": {
+    "@fastify/websocket": "^10.0.1",
+    "@orrery/shared": "workspace:*",
+    "fastify": "^4.27.0",
+    "ioredis": "^5.11.1",
+    "pg": "^8.11.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "@types/ws": "^8.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.4.5"
+  }
+}

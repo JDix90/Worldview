@@ -1,0 +1,21 @@
+{
+  "name": "orrery",
+  "private": true,
+  "version": "0.0.1",
+  "packageManager": "pnpm@10.9.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "msgpackr-extract"],
+    "overrides": {
+      "ioredis": "^5.11.1"
+    }
+  },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "dev:web": "pnpm --filter @orrery/web dev",
+    "dev:server": "pnpm --filter @orrery/server dev",
+    "dev:worker": "pnpm --filter @orrery/worker dev"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "@orrery/worker",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "verify:baselines": "tsx scripts/verifyBaselines.ts",
+    "verify:detectors": "tsx scripts/verifyDetectors.ts",
+    "verify:analyst": "tsx scripts/verifyAnalyst.ts",
+    "verify:live": "tsx scripts/liveAnalystCheck.ts",
+    "verify:replay": "tsx scripts/replayDetectors.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.111.0",
+    "@orrery/shared": "workspace:*",
+    "bullmq": "^5.73.4",
+    "ioredis": "^5.11.1",
+    "pg": "^8.11.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.4.5"
+  }
+}
