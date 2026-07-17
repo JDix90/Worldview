@@ -6,8 +6,10 @@
  * `?token=` query param (accepted trade-off for a localhost instrument — the
  * URL never leaves this machine and request logging is off; revisit in Phase 4).
  */
+import { existsSync } from 'node:fs';
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
+import fastifyStatic from '@fastify/static';
 import type { WebSocket } from 'ws';
 import { Redis } from 'ioredis';
 import pg from 'pg';
@@ -32,6 +34,15 @@ async function main(): Promise<void> {
   const app = Fastify({ logger: false });
   await app.register(websocket);
   registerApi(app, pool, feed, redis);
+
+  // Appliance mode: serve the built globe client when ORRERY_WEB_DIST points
+  // at a vite bundle (built on the dev machine, rsynced — RUNBOOK-PI5 §E).
+  // API/WS routes above take precedence; the client's paths are same-origin
+  // relative, so no extra config. LAN-only; token auth unchanged.
+  if (env.webDist && existsSync(env.webDist)) {
+    await app.register(fastifyStatic, { root: env.webDist });
+    log('server', 'serving globe client', { root: env.webDist });
+  }
 
   // Liveness + snapshot staleness; unauthenticated by design (leaks only an age).
   app.get('/healthz', async () => {

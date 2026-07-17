@@ -214,6 +214,8 @@ Running log. Every non-obvious choice gets a line: what was decided, why, what w
 
 86. **MHS-3.5 touch is electrically marginal; the display self-cycles.** First power-on: presses produced a 2,100-IRQ burst (oscillating PENIRQ) then the line latched dead — and soft reboots don't clear it (3.3V rail stays up). Rather than chase a flaky clone circuit, the display runs **carousel mode** (`CAROUSEL_SEC=15` — auto-advance, tap still wired and resets the dwell if the panel revives after a future power cut). Verified by framebuffer readback: pages cycle unaided. `xohms=60` left in config (harmless, possibly helpful post-power-cycle).
 
+87. **The globe is served by the appliance: http://10.0.0.177:8787.** The client was already fully origin-relative (`/api`, `/ws` via `location.host`), so appliance mode is just `@fastify/static@7` (Fastify 4 needs the v7 major — v8 targets Fastify 5) serving a vite bundle rsynced to `./webdist`, gated on `ORRERY_WEB_DIST`. Rendering happens in the viewing browser (the GPU is the viewer's); the Pi serves files + data. Verified live: 8,309 aircraft streaming in a pane pointed at the Pi with the Mac stack retired. Auth unchanged (API 401s without token; the token rides in the built bundle — same LAN threat model as before). Deploy path + the rsync-`--delete`-vs-device-local-files lesson: RUNBOOK-PI5 §E.
+
 ### Assumptions pending owner confirmation
 
 - OpenSky registered account + API client will be created by the owner; credentials into `.env`. **Blocks the collector chunk.**

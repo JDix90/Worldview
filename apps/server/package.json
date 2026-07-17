@@ -10,6 +10,7 @@
     "verify:ws": "tsx scripts/verifyWs.ts"
   },
   "dependencies": {
+    "@fastify/static": "^7.0.4",
     "@fastify/websocket": "^10.0.1",
     "@orrery/shared": "workspace:*",
     "fastify": "^4.27.0",

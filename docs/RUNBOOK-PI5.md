@@ -155,6 +155,21 @@ Mac where the GPU lives.)
    Postgres comes back clean (`docker compose up -d`, rollup continuity).
    Log the drill result in DECISIONS.
 
+## §E. Serving the globe from the appliance
+The Pi hosts the built web client at **http://10.0.0.177:8787** (server registers
+`@fastify/static` when `./webdist` exists — `ORRERY_WEB_DIST` in compose). Deploy
+a new client build from the Mac:
+```bash
+pnpm --filter @orrery/web build
+rsync -a --delete apps/web/dist/ pi@orrery.local:~/Project_Worldview/webdist/
+# no restart needed — static files are read per-request
+```
+**⚠ Full-repo rsync rule:** never `--delete` the repo root without excluding the
+device-local files (`webdist/`, `edge/pager/pager.env`, `edge/appliance/x1200.env`)
+and remember the Pi's `.env` carries appliance-specific values
+(`ORRERY_BIND_HOST=0.0.0.0`, `OPS_ALERTS_ENABLED=true`) that a Mac copy will
+clobber. (Learned the hard way — DECISIONS #87.)
+
 ## §D. Nightly backups (microSD endurance)
 ```bash
 sudo cp ~/Project_Worldview/edge/appliance/orrery-backup.{service,timer} /etc/systemd/system/

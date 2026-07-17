@@ -20,4 +20,6 @@ export const env = {
   authToken: process.env.ORRERY_AUTH_TOKEN ?? '',
   redisUrl: process.env.REDIS_URL ?? 'redis://localhost:6380',
   databaseUrl: process.env.DATABASE_URL ?? '',
+  /** Directory of a built web client to serve statically (appliance mode). */
+  webDist: process.env.ORRERY_WEB_DIST ?? '',
 };
