@@ -1,5 +1,11 @@
 # Runbook — move the ORRERY appliance backend to a Pi 5
 
+> **2026-07-17 hardware addendum — the actual build.** Owner's parts: Pi 5 +
+> active cooler + **SupTronics X1200 UPS** (2×18650, pogo-pin power, MAX17040
+> fuel gauge @ I2C 0x36, PLD GPIO) + **MHS-3.5" display** (ILI9486 480×320 SPI,
+> XPT2046 touch). Storage decision: **microSD + nightly dumps** (skip §0's
+> SSD steps; SSD later if wear shows). Supplemental steps: **§A–§D below.**
+
 Goal: run the always-on pipeline (postgres, redis, worker, server) on an always-on Pi 5 on the
 LAN, **preserving the soak history** (baselines, rollups, signals, briefings, shadow log). The
 Mac becomes just a viewer that points its browser at the Pi. Rationale + BOM: [EDGE.md](EDGE.md).
@@ -91,3 +97,68 @@ Mac where the GPU lives.)
 - **Ops alerts**: this is exactly when `OPS_ALERTS_ENABLED=true` earns its keep — a headless Pi
   that goes silent should ping ntfy. Flip it on at cutover.
 - **Firewall**: the Pi's `8787` is LAN-only by virtue of your router. Never forward it.
+
+---
+
+# Hardware addendum (X1200 UPS + MHS-3.5" display, microSD build)
+
+## §A. Assembly & flash
+- **Stacking**: X1200 mounts **under** the Pi (pogo-pin power to the bottom pads) —
+  the 40-pin header stays free; the MHS-3.5" seats on the header **on top**.
+  Cooler between them. Insert both 18650s (mind polarity), power via USB-C
+  **into the X1200**, not the Pi.
+- **Imager** (Raspberry Pi OS **Lite 64-bit** — no desktop; the display is
+  driven directly via the framebuffer): hostname `orrery`, ssh on, WiFi + user
+  (`pi`) preset. Boot; from the Mac: `ssh pi@orrery.local`. Everything from
+  here is done over ssh.
+
+## §B. MHS-3.5" display (piscreen overlay — no goodtft legacy scripts)
+1. `/boot/firmware/config.txt`, add:
+   ```
+   dtparam=spi=on
+   dtparam=i2c_arm=on
+   dtoverlay=piscreen,speed=18000000,rotate=90
+   ```
+   (`rotate=90` = landscape 480×320. If the panel misbehaves on the fbtft
+   route, the DRM fallback is `dtoverlay=piscreen,drm` — then the display
+   service needs the DRM variant instead of `/dev/fbN`.)
+2. Reboot; confirm: `ls /sys/class/graphics/` → expect `fb1` (SPI panel);
+   `cat /sys/class/graphics/fb1/virtual_size` → `480,320`.
+3. Display service (renders the pager pages to the framebuffer, touch = page
+   cycle):
+   ```bash
+   sudo apt install -y python3-venv fonts-dejavu-core
+   python3 -m venv ~/pager-venv && ~/pager-venv/bin/pip install -r ~/Project_Worldview/edge/pager/requirements.txt evdev
+   cp ~/Project_Worldview/edge/pager/pager.env.example ~/Project_Worldview/edge/pager/pager.env  # URL=http://127.0.0.1:8787, token
+   sudo cp ~/Project_Worldview/edge/appliance/orrery-display.service /etc/systemd/system/
+   sudo systemctl enable --now orrery-display
+   ```
+4. Verify without a camera: `sudo cat /dev/fb1 > /tmp/fb.raw` then convert
+   RGB565→PNG on the Mac (or just eyeball the panel).
+
+## §C. X1200 UPS monitor
+1. `sudo apt install -y python3-smbus2 python3-libgpiod i2c-tools`
+2. `i2cdetect -y 1` → expect `36` (MAX17040 fuel gauge).
+3. **Confirm the PLD pin before trusting shutdowns**: watch `pinctrl get 6`
+   while plugging/unplugging USB-C — it should follow external power. If it
+   doesn't, check the X1200 wiki pinout and set `PLD_GPIO` accordingly.
+4. ```bash
+   cp ~/Project_Worldview/edge/appliance/x1200.env.example ~/Project_Worldview/edge/appliance/x1200.env  # set NTFY_TOPIC
+   sudo cp ~/Project_Worldview/edge/appliance/orrery-x1200.service /etc/systemd/system/
+   sudo systemctl enable --now orrery-x1200
+   ```
+5. The monitor writes `/run/orrery-ups.json`; the display's SYSTEM page picks
+   up battery % and AC/ON-BATTERY automatically.
+6. **The drill** (do it once, on purpose): pull the USB-C → ntfy "on battery"
+   within ~20s, buckets keep accumulating → replug → all-clear. Then lower
+   `SOC_SHUTDOWN_PCT` temporarily to force the graceful-stop path and confirm
+   Postgres comes back clean (`docker compose up -d`, rollup continuity).
+   Log the drill result in DECISIONS.
+
+## §D. Nightly backups (microSD endurance)
+```bash
+sudo cp ~/Project_Worldview/edge/appliance/orrery-backup.{service,timer} /etc/systemd/system/
+sudo systemctl enable --now orrery-backup.timer
+systemctl list-timers | grep orrery   # next run 03:30
+```
+Restore path = §3's `pg_restore` with any `~/backups/orrery-YYYY-MM-DD.dump`.

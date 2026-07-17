@@ -1,0 +1,11 @@
+[Unit]
+Description=ORRERY nightly Postgres dump (microSD endurance mitigation)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/home/pi/Project_Worldview
+# -Fc custom format → pg_restore-able; keep 14 nights
+ExecStart=/bin/bash -c 'mkdir -p ~/backups && docker compose exec -T postgres pg_dump -U orrery -Fc orrery > ~/backups/orrery-$(date +%%F).dump && ls -t ~/backups/orrery-*.dump | tail -n +15 | xargs -r rm'

@@ -1,0 +1,15 @@
+[Unit]
+Description=ORRERY X1200 UPS monitor (battery telemetry + graceful shutdown)
+After=multi-user.target
+
+[Service]
+Type=simple
+# root: needs I2C/GPIO and clean `docker compose stop` + shutdown authority
+User=root
+EnvironmentFile=/home/pi/Project_Worldview/edge/appliance/x1200.env
+ExecStart=/usr/bin/python3 /home/pi/Project_Worldview/edge/appliance/x1200_monitor.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

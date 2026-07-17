@@ -1,0 +1,18 @@
+[Unit]
+Description=ORRERY status display (MHS-3.5" framebuffer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/pi/Project_Worldview/edge/pager
+EnvironmentFile=/home/pi/Project_Worldview/edge/pager/pager.env
+# fb device: confirm with `ls /sys/class/graphics/` after the piscreen overlay
+# (typically fb1 with HDMI attached, fb0 headless)
+ExecStart=/home/pi/pager-venv/bin/python /home/pi/Project_Worldview/edge/pager/orrery_pager.py --fb /dev/fb1 --touch auto
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

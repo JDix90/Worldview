@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """
-ORRERY duty-officer pager — Pi Zero 2 W + PiSugar Whisplay HAT (240x280 LCD,
-one button, RGB LED). Renders the Stage-4 digest from GET /api/pager/summary;
-never touches raw data (four-stage discipline). The globe stays on the desk —
-this is the watch in your pocket. See docs/EDGE.md.
+ORRERY duty-officer display — renders the Stage-4 digest from
+GET /api/pager/summary; never touches raw data (four-stage discipline).
 
-Design forced by the hardware: ONE physical button. Short press cycles pages,
-long press forces a refresh. The RGB LED is the at-a-glance status: green
-nominal, amber elevated, red S1 / feed-down. Rendering is pure PIL so it runs
-identically on hardware and in --mock (which writes PNGs for review).
+Two hardware targets, one pure-PIL renderer:
+  - Pi Zero 2 W + PiSugar Whisplay HAT: 240x280 portrait, one button, RGB LED
+  - Pi 5 appliance + MHS-3.5" (ILI9486): 480x320 landscape framebuffer,
+    XPT2046 resistive touch (tap = next page, long-press = refresh)
 
-Config via env or edge/pager/pager.env:
-  ORRERY_API_URL   e.g. http://orrery.local:8787   (the Pi 5 appliance)
+Interaction contract is identical everywhere: short input advances the page,
+long input forces a refresh. Rendering runs identically off-device via --mock
+(writes PNGs for review).
+
+Config via env or pager.env:
+  ORRERY_API_URL     e.g. http://orrery.local:8787
   ORRERY_AUTH_TOKEN  same static token as the web client
-  POLL_SEC         default 90
-  NTFY_TOPIC       optional — instant S1/S2 via ntfy SSE
-  NTFY_URL         default https://ntfy.sh
+  POLL_SEC           default 90
 """
 from __future__ import annotations
 
@@ -23,13 +23,11 @@ import argparse
 import os
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 import requests
 from PIL import Image, ImageDraw, ImageFont
-
-W, H = 240, 280
 
 # instrument palette (matches the globe HUD)
 BG = (6, 14, 22)
@@ -44,7 +42,7 @@ PANEL = (14, 26, 38)
 POLL_SEC = int(os.environ.get("POLL_SEC", "90"))
 
 
-# ─────────────────────────── fonts ───────────────────────────
+# ─────────────────────────── fonts / layout ───────────────────────────
 def _font(size: int) -> ImageFont.FreeTypeFont:
     for path in (
         "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
@@ -59,10 +57,33 @@ def _font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
-F_SM = _font(12)
-F_MD = _font(15)
-F_LG = _font(20)
-F_HUGE = _font(34)
+@dataclass(frozen=True)
+class Layout:
+    w: int
+    h: int
+    landscape: bool
+    sm: ImageFont.FreeTypeFont
+    md: ImageFont.FreeTypeFont
+    lg: ImageFont.FreeTypeFont
+    huge: ImageFont.FreeTypeFont
+    header_h: int
+    footer_h: int
+    pad: int
+    line_sm: int
+    line_md: int
+
+
+def make_layout(w: int, h: int) -> Layout:
+    landscape = w > h
+    # scale type roughly with the short edge (240 → the original sizes)
+    k = min(w, h) / 240.0 if not landscape else min(w, h) / 280.0
+    sz = lambda base: max(10, round(base * k))
+    return Layout(
+        w=w, h=h, landscape=landscape,
+        sm=_font(sz(12)), md=_font(sz(15)), lg=_font(sz(20)), huge=_font(sz(34)),
+        header_h=round(24 * k), footer_h=round(18 * k), pad=round(8 * k),
+        line_sm=round(14 * k), line_md=round(18 * k),
+    )
 
 
 # ─────────────────────────── data ───────────────────────────
@@ -88,7 +109,7 @@ def fetch_summary(url: str, token: str, timeout: float = 8.0) -> Optional[dict]:
 
 
 def overall_status(s: dict) -> str:
-    """green | amber | red — the LED and header dot."""
+    """green | amber | red — the LED / header dot."""
     feed = s.get("feed", {})
     if not feed.get("live", False):
         return "red"
@@ -97,16 +118,17 @@ def overall_status(s: dict) -> str:
     integ = s.get("integrity", [])
     if any(r.get("verdict") == "severe" for r in integ):
         return "red"
-    if any(r.get("verdict") == "elevated" for r in integ):
-        return "amber"
     if any(sig.get("severity") == "S1" for sig in s.get("signals", [])):
         return "red"
+    if any(r.get("verdict") == "elevated" for r in integ):
+        return "amber"
     if s.get("signals"):
         return "amber"
     return "green"
 
 
 STATUS_RGB = {"green": GREEN, "amber": AMBER, "red": RED, "stale": DIM}
+VERDICT_RGB = {"nominal": GREEN, "elevated": AMBER, "severe": RED, "no-data": DIM}
 
 
 # ─────────────────────────── text helpers ───────────────────────────
@@ -146,165 +168,220 @@ def _ago(sec: int) -> str:
 PAGES = ["STATUS", "SIGNALS", "BRIEFING", "INTEGRITY", "SYSTEM"]
 
 
-def render(summary: Optional[Summary], page_idx: int, sysinfo: dict) -> Image.Image:
-    img = Image.new("RGB", (W, H), BG)
+def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout) -> Image.Image:
+    img = Image.new("RGB", (L.w, L.h), BG)
     d = ImageDraw.Draw(img)
     page = PAGES[page_idx]
 
     # header bar
-    d.rectangle((0, 0, W, 24), fill=PANEL)
-    d.text((8, 5), "ORRERY", font=F_SM, fill=CYAN)
-    d.text((70, 5), page, font=F_SM, fill=WHITE)
+    d.rectangle((0, 0, L.w, L.header_h), fill=PANEL)
+    d.text((L.pad, (L.header_h - 14) // 2), "ORRERY", font=L.sm, fill=CYAN)
+    d.text((L.pad + round(L.w * 0.26), (L.header_h - 14) // 2), page, font=L.sm, fill=WHITE)
     status = "stale"
     if summary and summary.ok:
         status = overall_status(summary.raw)
         if summary.stale_s > POLL_SEC * 3:
             status = "stale"
-    d.ellipse((W - 20, 7, W - 8, 19), fill=STATUS_RGB[status])
+    r = L.header_h // 3
+    cy = L.header_h // 2
+    d.ellipse((L.w - L.pad - 2 * r, cy - r, L.w - L.pad, cy + r), fill=STATUS_RGB[status])
 
     if not summary or not summary.ok:
-        d.text((8, 120), "no contact", font=F_LG, fill=RED)
-        d.text((8, 148), "with backend", font=F_LG, fill=RED)
+        d.text((L.pad, L.h // 2 - L.line_md), "no contact", font=L.lg, fill=RED)
+        d.text((L.pad, L.h // 2 + 4), "with backend", font=L.lg, fill=RED)
         if summary:
-            d.text((8, 180), f"last ok {_ago(summary.stale_s)} ago", font=F_SM, fill=DIM)
-        _footer(d, page_idx, sysinfo)
+            d.text((L.pad, L.h // 2 + L.line_md * 2), f"last ok {_ago(summary.stale_s)} ago", font=L.sm, fill=DIM)
+        _footer(d, page_idx, sysinfo, L)
         return img
 
     s = summary.raw
-    body_fn = {
+    {
         "STATUS": _page_status,
         "SIGNALS": _page_signals,
         "BRIEFING": _page_briefing,
         "INTEGRITY": _page_integrity,
         "SYSTEM": _page_system,
-    }[page]
-    body_fn(d, s, sysinfo, summary)
-    _footer(d, page_idx, sysinfo)
+    }[page](d, s, sysinfo, summary, L)
+    _footer(d, page_idx, sysinfo, L)
     return img
 
 
-def _footer(d: ImageDraw.ImageDraw, page_idx: int, sysinfo: dict) -> None:
-    y = H - 18
-    d.rectangle((0, y, W, H), fill=PANEL)
-    # page dots
+def _footer(d: ImageDraw.ImageDraw, page_idx: int, sysinfo: dict, L: Layout) -> None:
+    y = L.h - L.footer_h
+    d.rectangle((0, y, L.w, L.h), fill=PANEL)
     for i in range(len(PAGES)):
-        cx = 10 + i * 14
+        cx = L.pad + 2 + i * 14
         col = CYAN if i == page_idx else DIM
-        d.ellipse((cx, y + 6, cx + 6, y + 12), fill=col if i == page_idx else None, outline=col)
+        d.ellipse((cx, y + L.footer_h // 3, cx + 6, y + L.footer_h // 3 + 6),
+                  fill=col if i == page_idx else None, outline=col)
     batt = sysinfo.get("battery_pct")
     label = f"{batt}%" if batt is not None else sysinfo.get("clock", "")
-    d.text((W - 8 - d.textlength(label, font=F_SM), y + 3), label, font=F_SM, fill=DIM)
+    d.text((L.w - L.pad - d.textlength(label, font=L.sm), y + 2), label, font=L.sm, fill=DIM)
 
 
-def _page_status(d, s, _sys, summ) -> None:
+def _col_x(L: Layout) -> int:
+    """Landscape: x where the right column starts."""
+    return L.w // 2 + L.pad
+
+
+def _page_status(d, s, _sys, summ, L: Layout) -> None:
     feed = s["feed"]
     st = overall_status(s)
-    d.text((8, 40), {"green": "NOMINAL", "amber": "ELEVATED", "red": "ATTENTION"}[st],
-           font=F_LG, fill=STATUS_RGB[st])
-    d.text((8, 78), "FEED", font=F_SM, fill=DIM)
-    d.text((8, 94), "LIVE" if feed["live"] else "DOWN", font=F_HUGE,
-           fill=GREEN if feed["live"] else RED)
-    d.text((8, 140), f"{feed['aircraft']:,} aircraft", font=F_MD, fill=WHITE)
-    d.text((8, 162), f"data {feed['dataAgeS']}s old", font=F_SM, fill=DIM)
+    y0 = L.header_h + L.pad
+    d.text((L.pad, y0), {"green": "NOMINAL", "amber": "ELEVATED", "red": "ATTENTION"}[st],
+           font=L.lg, fill=STATUS_RGB[st])
+    d.text((L.pad, y0 + L.line_md * 2), "FEED", font=L.sm, fill=DIM)
+    d.text((L.pad, y0 + L.line_md * 2 + L.line_sm), "LIVE" if feed["live"] else "DOWN",
+           font=L.huge, fill=GREEN if feed["live"] else RED)
+    yb = y0 + L.line_md * 2 + L.line_sm + round(L.huge.size * 1.3)
+    d.text((L.pad, yb), f"{feed['aircraft']:,} aircraft", font=L.md, fill=WHITE)
+    d.text((L.pad, yb + L.line_md), f"data {feed['dataAgeS']}s old", font=L.sm, fill=DIM)
+
     n_sig = len(s.get("signals", []))
-    d.text((8, 192), f"{n_sig} open signal{'s' if n_sig != 1 else ''}", font=F_MD, fill=WHITE)
     s1 = s.get("shadowS1Last24h", 0)
-    d.text((8, 214), f"{s1} S1 shadow / 24h", font=F_SM, fill=AMBER if s1 else DIM)
-    d.text((8, 236), f"synced {_ago(summ.stale_s)} ago", font=F_SM, fill=DIM)
+    if L.landscape:
+        # right column: signals count + integrity mini-list
+        x = _col_x(L)
+        d.text((x, y0), f"{n_sig} open signal{'s' if n_sig != 1 else ''}", font=L.md, fill=WHITE)
+        d.text((x, y0 + L.line_md), f"{s1} S1 shadow / 24h", font=L.sm, fill=AMBER if s1 else DIM)
+        yy = y0 + L.line_md * 2 + L.pad
+        d.text((x, yy), "GPS INTEGRITY", font=L.sm, fill=CYAN)
+        yy += L.line_sm + 2
+        for r in s.get("integrity", []):
+            v = r.get("verdict", "no-data")
+            pct = r.get("pct")
+            name = r.get("name", "")
+            short = name if d.textlength(name, font=L.sm) < L.w - x - 60 else name[:18] + "…"
+            d.text((x, yy), short, font=L.sm, fill=WHITE)
+            label = v.upper() if pct is None else f"{v.upper()} {pct}%"
+            d.text((x, yy + L.line_sm), label, font=L.sm, fill=VERDICT_RGB.get(v, DIM))
+            yy += L.line_sm * 2 + 4
+            if yy > L.h - L.footer_h - L.line_sm * 2:
+                break
+        d.text((L.pad, L.h - L.footer_h - L.line_sm - 4),
+               f"synced {_ago(summ.stale_s)} ago", font=L.sm, fill=DIM)
+    else:
+        yb2 = yb + L.line_md * 2
+        d.text((L.pad, yb2), f"{n_sig} open signal{'s' if n_sig != 1 else ''}", font=L.md, fill=WHITE)
+        d.text((L.pad, yb2 + L.line_md), f"{s1} S1 shadow / 24h", font=L.sm, fill=AMBER if s1 else DIM)
+        d.text((L.pad, yb2 + L.line_md + L.line_sm + 4), f"synced {_ago(summ.stale_s)} ago", font=L.sm, fill=DIM)
 
 
-def _page_signals(d, s, _sys, _summ) -> None:
+def _page_signals(d, s, _sys, _summ, L: Layout) -> None:
     sigs = s.get("signals", [])
     if not sigs:
-        d.text((8, 130), "nothing of note", font=F_MD, fill=DIM)
+        d.text((L.pad, L.h // 2 - 8), "nothing of note", font=L.md, fill=DIM)
         return
-    y = 32
-    for sig in sigs[:4]:
+    y = L.header_h + L.pad
+    max_w = L.w - 2 * L.pad
+    n = 6 if L.landscape else 4
+    for sig in sigs[:n]:
         sev = sig.get("severity", "S?")
         col = RED if sev == "S1" else AMBER
-        d.text((8, y), sev, font=F_MD, fill=col)
-        d.text((40, y), f"{sig.get('region') or '—'}  {_ago(sig.get('ageS', 0))}", font=F_SM, fill=DIM)
-        lines = _wrap(d, sig.get("what", ""), F_SM, W - 16)[:2]
-        yy = y + 18
-        for ln in lines:
-            d.text((8, yy), ln, font=F_SM, fill=WHITE)
-            yy += 14
+        d.text((L.pad, y), sev, font=L.md, fill=col)
+        d.text((L.pad + 34, y), f"{sig.get('region') or '—'}  {_ago(sig.get('ageS', 0))}",
+               font=L.sm, fill=DIM)
         disp = sig.get("disposition")
-        if disp:
-            d.text((8, yy), f"› {disp}", font=F_SM, fill=CYAN)
-            yy += 14
+        if disp and L.landscape:
+            d.text((L.pad + 200, y), f"› {disp}", font=L.sm, fill=CYAN)
+        lines = _wrap(d, sig.get("what", ""), L.sm, max_w)[: (1 if L.landscape else 2)]
+        yy = y + L.line_md
+        for ln in lines:
+            d.text((L.pad, yy), ln, font=L.sm, fill=WHITE)
+            yy += L.line_sm
+        if disp and not L.landscape:
+            d.text((L.pad, yy), f"› {disp}", font=L.sm, fill=CYAN)
+            yy += L.line_sm
         y = yy + 6
-        if y > H - 40:
+        if y > L.h - L.footer_h - L.line_md * 2:
             break
 
 
-def _page_briefing(d, s, _sys, _summ) -> None:
+def _page_briefing(d, s, _sys, _summ, L: Layout) -> None:
     b = s.get("briefing")
     if not b:
-        d.text((8, 130), "no briefing yet", font=F_MD, fill=DIM)
+        d.text((L.pad, L.h // 2 - 8), "no briefing yet", font=L.md, fill=DIM)
         return
+    y0 = L.header_h + L.pad
     date = str(b.get("date", ""))[:10]
-    d.text((8, 32), date, font=F_SM, fill=CYAN)
+    d.text((L.pad, y0), date, font=L.sm, fill=CYAN)
     tag = "QUIET" if b.get("quiet") else "ACTIVE"
-    d.text((W - 8 - d.textlength(tag, font=F_SM), 32), tag,
-           font=F_SM, fill=DIM if b.get("quiet") else AMBER)
-    y = 54
-    for ln in _wrap(d, _demark(b.get("headline", "")), F_MD, W - 16)[:3]:
-        d.text((8, y), ln, font=F_MD, fill=WHITE)
-        y += 18
-    y += 6
-    for ln in _wrap(d, _demark(b.get("open", "")), F_SM, W - 16)[:11]:
-        d.text((8, y), ln, font=F_SM, fill=DIM)
-        y += 14
-        if y > H - 30:
-            break
+    d.text((L.w - L.pad - d.textlength(tag, font=L.sm), y0), tag,
+           font=L.sm, fill=DIM if b.get("quiet") else AMBER)
+    y = y0 + L.line_sm + 6
+    max_w = L.w - 2 * L.pad
+    for ln in _wrap(d, _demark(b.get("headline", "")), L.md, max_w)[:2]:
+        d.text((L.pad, y), ln, font=L.md, fill=WHITE)
+        y += L.line_md
+    y += 4
+    body_lines = (L.h - L.footer_h - y) // L.line_sm
+    for ln in _wrap(d, _demark(b.get("open", "")), L.sm, max_w)[:body_lines]:
+        d.text((L.pad, y), ln, font=L.sm, fill=DIM)
+        y += L.line_sm
 
 
-def _page_integrity(d, s, _sys, _summ) -> None:
-    d.text((8, 30), "GPS INTEGRITY", font=F_SM, fill=CYAN)
-    y = 54
-    vcol = {"nominal": GREEN, "elevated": AMBER, "severe": RED, "no-data": DIM}
-    for r in s.get("integrity", []):
-        name = r.get("name", "")[:22]
-        d.text((8, y), name, font=F_SM, fill=WHITE)
-        v = r.get("verdict", "no-data")
-        pct = r.get("pct")
-        label = v.upper() if pct is None else f"{v.upper()} {pct}%"
-        d.text((8, y + 15), label, font=F_MD, fill=vcol.get(v, DIM))
-        y += 44
-        if y > H - 30:
-            break
+def _page_integrity(d, s, _sys, _summ, L: Layout) -> None:
+    y0 = L.header_h + L.pad
+    d.text((L.pad, y0), "GPS INTEGRITY", font=L.sm, fill=CYAN)
+    regions = s.get("integrity", [])
+    if L.landscape:
+        # two columns of region blocks
+        col_w = (L.w - 3 * L.pad) // 2
+        for i, r in enumerate(regions):
+            cx = L.pad + (i % 2) * (col_w + L.pad)
+            cy = y0 + L.line_sm + 8 + (i // 2) * (L.line_sm + L.line_md + 14)
+            _integrity_block(d, r, cx, cy, L)
+    else:
+        y = y0 + L.line_sm + 10
+        for r in regions:
+            _integrity_block(d, r, L.pad, y, L)
+            y += L.line_sm + L.line_md + 12
+            if y > L.h - L.footer_h - L.line_md:
+                break
 
 
-def _page_system(d, s, sysinfo, summ) -> None:
-    d.text((8, 30), "SYSTEM", font=F_SM, fill=CYAN)
+def _integrity_block(d, r: dict, x: int, y: int, L: Layout) -> None:
+    name = r.get("name", "")
+    short = name if len(name) <= 24 else name[:23] + "…"
+    d.text((x, y), short, font=L.sm, fill=WHITE)
+    v = r.get("verdict", "no-data")
+    pct = r.get("pct")
+    label = v.upper() if pct is None else f"{v.upper()} {pct}%"
+    d.text((x, y + L.line_sm), label, font=L.md, fill=VERDICT_RGB.get(v, DIM))
+
+
+def _page_system(d, s, sysinfo, summ, L: Layout) -> None:
+    y0 = L.header_h + L.pad
+    d.text((L.pad, y0), "SYSTEM", font=L.sm, fill=CYAN)
     rows = [
         ("battery", f"{sysinfo['battery_pct']}%" if sysinfo.get("battery_pct") is not None else "—"),
+        ("power", sysinfo.get("power", "—")),
         ("wifi", sysinfo.get("wifi", "—")),
         ("backend", "reachable" if (summ and summ.ok) else "unreachable"),
         ("last sync", f"{_ago(summ.stale_s)} ago" if summ else "—"),
         ("poll", f"{POLL_SEC}s"),
         ("clock", sysinfo.get("clock", "")),
     ]
-    y = 54
+    y = y0 + L.line_sm + 8
+    label_w = round(L.w * 0.42)
     for k, v in rows:
-        d.text((8, y), k, font=F_SM, fill=DIM)
-        d.text((110, y), str(v), font=F_SM, fill=WHITE)
-        y += 26
+        d.text((L.pad, y), k, font=L.sm, fill=DIM)
+        d.text((L.pad + label_w, y), str(v), font=L.sm, fill=WHITE)
+        y += L.line_sm + 8
 
 
 # ─────────────────────────── hardware backends ───────────────────────────
 class Backend:
     def blit(self, img: Image.Image) -> None: ...
     def set_led(self, rgb: tuple[int, int, int]) -> None: ...
-    def on_button(self, short: Callable[[], None], long: Callable[[], None]) -> None: ...
+    def on_input(self, short: Callable[[], None], long: Callable[[], None]) -> None: ...
     def battery_pct(self) -> Optional[int]:
         return None
     def cleanup(self) -> None: ...
 
 
 class WhisplayBackend(Backend):
-    """Real hardware. Imports the vendor driver; converts PIL→RGB565-BE."""
+    """Pi Zero 2 W + Whisplay HAT: SPI blit (RGB565 big-endian), button, LED."""
 
     LONG_PRESS_S = 0.6
 
@@ -320,16 +397,13 @@ class WhisplayBackend(Backend):
         import numpy as np
 
         a = np.asarray(img.convert("RGB"), dtype=np.uint16)
-        r = (a[:, :, 0] >> 3) << 11
-        g = (a[:, :, 1] >> 2) << 5
-        b = a[:, :, 2] >> 3
-        rgb565 = (r | g | b).astype(">u2")  # big-endian: driver sends high byte first
-        self.board.draw_image(0, 0, W, H, rgb565.tobytes())
+        rgb565 = (((a[:, :, 0] >> 3) << 11) | ((a[:, :, 1] >> 2) << 5) | (a[:, :, 2] >> 3)).astype(">u2")
+        self.board.draw_image(0, 0, img.width, img.height, rgb565.tobytes())
 
     def set_led(self, rgb: tuple[int, int, int]) -> None:
         self.board.set_rgb(*rgb)
 
-    def on_button(self, short, long) -> None:
+    def on_input(self, short, long) -> None:
         self._short, self._long = short, long
         self.board.on_button_press(lambda: setattr(self, "_down_at", time.time()))
         self.board.on_button_release(self._release)
@@ -340,7 +414,6 @@ class WhisplayBackend(Backend):
 
     def battery_pct(self) -> Optional[int]:
         try:
-            # PiSugar exposes battery over a local TCP socket (get battery)
             import socket
 
             s = socket.create_connection(("127.0.0.1", 8423), timeout=1)
@@ -355,14 +428,133 @@ class WhisplayBackend(Backend):
         self.board.cleanup()
 
 
+class FramebufferBackend(Backend):
+    """Pi 5 appliance + MHS-3.5" via fbtft: mmap /dev/fbN, RGB565 little-endian.
+
+    Geometry (xres/yres/bpp/stride) is read from sysfs so rotation and driver
+    quirks are respected. Optional XPT2046 touch via evdev: tap = short,
+    hold >= 0.6s = long. Battery/power come from the X1200 monitor's status
+    file when present (written by edge/appliance/x1200_monitor.py).
+    """
+
+    LONG_PRESS_S = 0.6
+    X1200_STATUS = "/run/orrery-ups.json"
+
+    def __init__(self, fbdev: str, touch: Optional[str]) -> None:
+        import mmap
+
+        name = os.path.basename(fbdev)
+        sysfs = f"/sys/class/graphics/{name}"
+        self.xres, self.yres = (
+            int(v) for v in open(f"{sysfs}/virtual_size").read().strip().split(",")
+        )
+        self.bpp = int(open(f"{sysfs}/bits_per_pixel").read().strip())
+        try:
+            self.stride = int(open(f"{sysfs}/stride").read().strip())
+        except OSError:
+            self.stride = self.xres * self.bpp // 8
+        if self.bpp != 16:
+            raise RuntimeError(f"{fbdev}: expected 16bpp RGB565, got {self.bpp}bpp")
+        self._f = open(fbdev, "r+b")
+        self._mm = mmap.mmap(self._f.fileno(), self.stride * self.yres)
+        self._short = self._long = lambda: None
+        self._touch_thread = None
+        self._touch_stop = False
+        if touch:
+            self._start_touch(touch)
+
+    def blit(self, img: Image.Image) -> None:
+        import numpy as np
+
+        if img.size != (self.xres, self.yres):
+            img = img.resize((self.xres, self.yres))
+        a = np.asarray(img.convert("RGB"), dtype=np.uint16)
+        rgb565 = (((a[:, :, 0] >> 3) << 11) | ((a[:, :, 1] >> 2) << 5) | (a[:, :, 2] >> 3)).astype("<u2")
+        row_bytes = self.xres * 2
+        buf = rgb565.tobytes()
+        if self.stride == row_bytes:
+            self._mm.seek(0)
+            self._mm.write(buf)
+        else:
+            for y in range(self.yres):
+                self._mm.seek(y * self.stride)
+                self._mm.write(buf[y * row_bytes : (y + 1) * row_bytes])
+
+    def set_led(self, rgb: tuple[int, int, int]) -> None:
+        pass  # no LED on this hardware; the header dot carries the status
+
+    def on_input(self, short, long) -> None:
+        self._short, self._long = short, long
+
+    def _start_touch(self, spec: str) -> None:
+        import threading
+
+        def find_device() -> Optional[str]:
+            if spec != "auto":
+                return spec
+            try:
+                from evdev import InputDevice, list_devices
+
+                for path in list_devices():
+                    if "ADS7846" in InputDevice(path).name.upper():
+                        return path
+            except Exception:
+                pass
+            return None
+
+        def loop() -> None:
+            from evdev import InputDevice, ecodes
+
+            path = find_device()
+            if not path:
+                print("[display] no touch device found", file=sys.stderr)
+                return
+            dev = InputDevice(path)
+            down_at = 0.0
+            for ev in dev.read_loop():
+                if self._touch_stop:
+                    return
+                if ev.type == ecodes.EV_KEY and ev.code == ecodes.BTN_TOUCH:
+                    if ev.value == 1:
+                        down_at = time.time()
+                    else:
+                        held = time.time() - down_at
+                        (self._long if held >= self.LONG_PRESS_S else self._short)()
+
+        self._touch_thread = threading.Thread(target=loop, daemon=True)
+        self._touch_thread.start()
+
+    def battery_pct(self) -> Optional[int]:
+        try:
+            import json
+
+            st = json.load(open(self.X1200_STATUS))
+            return int(st.get("soc_pct"))
+        except Exception:
+            return None
+
+    def power_label(self) -> Optional[str]:
+        try:
+            import json
+
+            st = json.load(open(self.X1200_STATUS))
+            return "AC" if st.get("ac_present") else "ON BATTERY"
+        except Exception:
+            return None
+
+    def cleanup(self) -> None:
+        self._touch_stop = True
+        self._mm.close()
+        self._f.close()
+
+
 class MockBackend(Backend):
-    """Off-device: writes each frame to a PNG for review; button via stdin thread."""
+    """Off-device: writes each frame to a PNG; no input."""
 
     def __init__(self, shot_dir: str) -> None:
         self.shot_dir = shot_dir
         os.makedirs(shot_dir, exist_ok=True)
         self.frame = 0
-        self._short = self._long = lambda: None
 
     def blit(self, img: Image.Image) -> None:
         path = os.path.join(self.shot_dir, f"frame_{self.frame:03d}.png")
@@ -373,8 +565,8 @@ class MockBackend(Backend):
     def set_led(self, rgb: tuple[int, int, int]) -> None:
         self.last_led = rgb
 
-    def on_button(self, short, long) -> None:
-        self._short, self._long = short, long
+    def on_input(self, short, long) -> None:
+        pass
 
     def cleanup(self) -> None:
         pass
@@ -386,6 +578,7 @@ class App:
     url: str
     token: str
     backend: Backend
+    layout: Layout
     page_idx: int = 0
     summary: Optional[Summary] = None
     _dirty: bool = True
@@ -398,23 +591,27 @@ class App:
         try:
             data = fetch_summary(self.url, self.token)
             self.summary = Summary(raw=data, fetched_at=time.time(), ok=True)
-        except Exception as e:  # never crash the pager on a bad poll
+        except Exception as e:  # never crash the display on a bad poll
             if self.summary:
                 self.summary.ok = False
             else:
                 self.summary = Summary(raw={}, fetched_at=time.time(), ok=False)
-            print(f"[pager] poll failed: {e}", file=sys.stderr)
+            print(f"[display] poll failed: {e}", file=sys.stderr)
         self._dirty = True
 
     def sysinfo(self) -> dict:
-        return {
+        info = {
             "battery_pct": self.backend.battery_pct(),
             "wifi": _wifi_label(),
             "clock": time.strftime("%H:%M"),
         }
+        power = getattr(self.backend, "power_label", lambda: None)()
+        if power:
+            info["power"] = power
+        return info
 
     def draw(self) -> None:
-        img = render(self.summary, self.page_idx, self.sysinfo())
+        img = render(self.summary, self.page_idx, self.sysinfo(), self.layout)
         self.backend.blit(img)
         led = STATUS_RGB["stale"]
         if self.summary and self.summary.ok:
@@ -423,14 +620,19 @@ class App:
         self._dirty = False
 
     def run(self) -> None:
-        self.backend.on_button(self.next_page, self.refresh)
+        self.backend.on_input(self.next_page, self.refresh)
         self.refresh()
         self.draw()
         last_poll = time.time()
+        last_clock = ""
         while True:
             if time.time() - last_poll >= POLL_SEC:
                 self.refresh()
                 last_poll = time.time()
+            clock = time.strftime("%H:%M")
+            if clock != last_clock:  # keep the footer clock honest
+                last_clock = clock
+                self._dirty = True
             if self._dirty:
                 self.draw()
             time.sleep(0.05)
@@ -451,6 +653,11 @@ def main() -> None:
     ap.add_argument("--mock", metavar="DIR", help="render frames to PNGs instead of hardware")
     ap.add_argument("--shot-all", metavar="SUMMARY_JSON",
                     help="with --mock: render every page once from a summary JSON file, then exit")
+    ap.add_argument("--size", default=None, metavar="WxH",
+                    help="render size (default: Whisplay 240x280, or the fb's native size)")
+    ap.add_argument("--fb", metavar="/dev/fbN", help="framebuffer device (MHS-3.5 route)")
+    ap.add_argument("--touch", default=None, metavar="auto|/dev/input/eventN",
+                    help="XPT2046 touch device for the fb route")
     args = ap.parse_args()
 
     url = os.environ.get("ORRERY_API_URL", "http://127.0.0.1:8787").rstrip("/")
@@ -459,20 +666,32 @@ def main() -> None:
     if args.mock and args.shot_all:
         import json
 
+        os.makedirs(args.mock, exist_ok=True)
+        w, h = (int(v) for v in (args.size or "240x280").split("x"))
+        L = make_layout(w, h)
         data = json.load(open(args.shot_all))
-        backend = MockBackend(args.mock)
         summ = Summary(raw=data, fetched_at=time.time(), ok=True)
+        sysinfo = {"battery_pct": 82, "wifi": "home", "clock": "07:14", "power": "AC"}
         for i in range(len(PAGES)):
-            img = render(summ, i, {"battery_pct": 82, "wifi": "home", "clock": "07:14"})
-            img.save(os.path.join(args.mock, f"{PAGES[i].lower()}.png"))
-        # plus the no-contact state
-        render(Summary(raw={}, fetched_at=time.time() - 500, ok=False), 0,
-               {"clock": "07:14"}).save(os.path.join(args.mock, "no_contact.png"))
-        print(f"wrote {len(PAGES)+1} page PNGs to {args.mock}")
+            render(summ, i, sysinfo, L).save(os.path.join(args.mock, f"{PAGES[i].lower()}.png"))
+        render(Summary(raw={}, fetched_at=time.time() - 500, ok=False), 0, sysinfo, L).save(
+            os.path.join(args.mock, "no_contact.png"))
+        print(f"wrote {len(PAGES) + 1} page PNGs to {args.mock} at {w}x{h}")
         return
 
-    backend = MockBackend(args.mock) if args.mock else WhisplayBackend()
-    app = App(url=url, token=token, backend=backend)
+    if args.fb:
+        backend: Backend = FramebufferBackend(args.fb, args.touch)
+        w, h = backend.xres, backend.yres  # type: ignore[attr-defined]
+    elif args.mock:
+        backend = MockBackend(args.mock)
+        w, h = (int(v) for v in (args.size or "240x280").split("x"))
+    else:
+        backend = WhisplayBackend()
+        w, h = 240, 280
+    if args.size and not args.fb:
+        w, h = (int(v) for v in args.size.split("x"))
+
+    app = App(url=url, token=token, backend=backend, layout=make_layout(w, h))
     try:
         app.run()
     except KeyboardInterrupt:

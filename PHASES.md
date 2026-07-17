@@ -110,6 +110,18 @@ Assessment + build in response to "Pi Zero 2 W handheld or Pi 5?". Verdicts: glo
 | Pi 5 appliance prep | Compose LAN bind + web proxy target parametrized (Mac default unchanged); RUNBOOK-PI5.md with soak-preserving `pg_dump` migration | ✅ prepped (build when hardware arrives) |
 | Zero 2 W pager | `GET /api/pager/summary` (~1.8KB, authed, four-stage-clean) + `edge/pager/` Python client (5 pages, 1-button, RGB LED); all pages verified off-device via PNG render | ✅ code complete (on-device bring-up when handheld is connected) |
 
+## Phase 1.5h — Pi 5 appliance build (2026-07-17, DECISIONS #80–81)
+
+Hardware on hand: Pi 5 + cooler + X1200 UPS (2×18650) + MHS-3.5" (480×320). Zero 2 W shelved; the panel takes the pager role.
+
+| Step | What | Status |
+|---|---|---|
+| H0 Mac-side | 480×320 landscape renderer + fb/touch backends (PNG-verified live); X1200 monitor (mock drill passes); nightly-dump timer; runbook §A–§D | ✅ |
+| H1 Flash | Pi OS Lite 64-bit, hostname `orrery`, ssh — **owner's hands** | ⬜ |
+| H2 Migration | Docker CE, restore soak via pg_dump, retire Mac stack, OPS alerts on | ⬜ (ssh session) |
+| H3 Display | piscreen overlay, fb1 confirm, display service, touch | ⬜ (ssh session) |
+| H4 UPS drill | i2c 0x36, PLD confirm, pull-the-plug + graceful-stop test | ⬜ (ssh session) |
+
 ## Phases 2+ — sketches only (one paragraph each, contingent on the gate)
 
 **Phase 2 — Second layer.** Add one more collector through the existing seams — candidate chosen *at the time* by what Phase 1 taught us (likely candidates: earthquakes/USGS for its clean feed, or weather overlay for globe beauty; but the gate review decides). The test of the architecture: a new source should be an adapter, a baseline config, and detectors — no changes to stages' contracts. Real NOTAM integration for the analyst belongs here if the traffic-collapse detector proved useful.
