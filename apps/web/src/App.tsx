@@ -17,6 +17,7 @@ export function App() {
   const milStore = useMemo(() => new AircraftStore(), []);
   const { status } = useAircraftFeed(store, milStore);
   const [selectedHex, setSelectedHex] = useState<string | null>(null);
+  const [routeHex, setRouteHex] = useState<string | null>(null);
   const [card, setCard] = useState<LayerCard | null>(null);
   const [spinEnabled, setSpinEnabled] = useState(() => loadPrefs().spinEnabled);
   const toggleSpin = useCallback(() => {
@@ -46,6 +47,7 @@ export function App() {
   // and vice versa
   const handleSelect = useCallback((hex: string | null) => {
     setSelectedHex(hex);
+    setRouteHex(null); // a new selection hides the previous flight's path
     if (hex !== null) setCard(null);
   }, []);
   const handleCard = useCallback((c: LayerCard | null) => {
@@ -63,10 +65,17 @@ export function App() {
         layersEnabled={layersEnabled}
         setCard={handleCard}
         spinEnabled={spinEnabled}
+        routeHex={routeHex}
       />
       <Hud store={store} feedStatus={status} />
       {selectedHex && (
-        <AircraftCard store={store} hex={selectedHex} onClose={() => setSelectedHex(null)} />
+        <AircraftCard
+          store={store}
+          hex={selectedHex}
+          onClose={() => setSelectedHex(null)}
+          routeShown={routeHex === selectedHex}
+          onToggleRoute={() => setRouteHex((r) => (r === selectedHex ? null : selectedHex))}
+        />
       )}
       {card && !selectedHex && <ObjectCard card={card} onClose={() => setCard(null)} />}
       <FeedPanel />

@@ -16,6 +16,7 @@ import { createTerminatorMaterial } from './terminator';
 import { subsolarPoint } from './solar';
 import { buildPerfMarkers, perfMarkerCountFromQuery } from './perfMarkers';
 import { AircraftLayer } from './AircraftLayer';
+import { RouteLayer } from './RouteLayer';
 import type { AircraftStore } from '../feed/aircraftStore';
 import type { LayerCard, LayerCtx, LayerDef, LayerInstance, Picker } from '../layers/registry';
 
@@ -47,6 +48,8 @@ interface GlobeViewProps {
   layersEnabled: Set<string>;
   setCard: (card: LayerCard | null) => void;
   spinEnabled: boolean;
+  /** Hex of the aircraft whose flight path is shown, or null. */
+  routeHex: string | null;
 }
 
 export function GlobeView({
@@ -57,6 +60,7 @@ export function GlobeView({
   layersEnabled,
   setCard,
   spinEnabled,
+  routeHex,
 }: GlobeViewProps) {
   const globeRef = useRef<GlobeMethods | undefined>(undefined);
   const [material, setMaterial] = useState<THREE.ShaderMaterial | null>(null);
@@ -285,6 +289,9 @@ export function GlobeView({
           registerPicker={registerPickerRef.current}
           visible={layersEnabled.has('flights')}
         />
+      )}
+      {ready && globeRef.current && routeHex && (
+        <RouteLayer globe={globeRef.current} store={store} hex={routeHex} />
       )}
     </>
   );
