@@ -75,24 +75,40 @@ class Gauge:
         return self.read_word(REG_SOC) / 256.0
 
 
+def _rp1_chip_path() -> str:
+    """The 40-pin header GPIOs live on the RP1 ('pinctrl-rp1'). Its chip NUMBER
+    moved between kernels (gpiochip4 on bookworm, gpiochip0 on trixie), so
+    select by label, never by number."""
+    import glob
+
+    for sysdir in glob.glob("/sys/bus/gpio/devices/gpiochip*"):
+        try:
+            if "rp1" in open(f"{sysdir}/label").read():
+                return "/dev/" + os.path.basename(sysdir)
+        except OSError:
+            continue
+    return "/dev/gpiochip0"
+
+
 class PldPin:
     """Power-loss detect: HIGH = external power present."""
 
     def __init__(self, gpio: int) -> None:
         import gpiod
 
-        if hasattr(gpiod, "LineSettings"):  # gpiod v2 (Bookworm)
+        path = _rp1_chip_path()
+        if hasattr(gpiod, "LineSettings"):  # gpiod v2
             from gpiod.line import Direction
 
             self.req = gpiod.request_lines(
-                "/dev/gpiochip4" if os.path.exists("/dev/gpiochip4") else "/dev/gpiochip0",
+                path,
                 consumer="orrery-x1200",
                 config={gpio: gpiod.LineSettings(direction=Direction.INPUT)},
             )
             self.gpio = gpio
             self.v2 = True
         else:  # gpiod v1
-            chip = gpiod.Chip("gpiochip4" if os.path.exists("/dev/gpiochip4") else "gpiochip0")
+            chip = gpiod.Chip(path)
             self.line = chip.get_line(gpio)
             self.line.request(consumer="orrery-x1200", type=gpiod.LINE_REQ_DIR_IN)
             self.v2 = False

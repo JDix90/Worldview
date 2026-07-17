@@ -40,6 +40,10 @@ GREEN = (107, 227, 107)
 PANEL = (14, 26, 38)
 
 POLL_SEC = int(os.environ.get("POLL_SEC", "90"))
+# Auto-advance pages every N seconds (0 = off). The MHS-3.5 clone's resistive
+# touch proved electrically marginal (PENIRQ latches until a real power cut),
+# so the appliance display self-cycles; touch still works when it feels like it.
+CAROUSEL_SEC = int(os.environ.get("CAROUSEL_SEC", "0"))
 
 
 # ─────────────────────────── fonts / layout ───────────────────────────
@@ -620,7 +624,13 @@ class App:
         self._dirty = False
 
     def run(self) -> None:
-        self.backend.on_input(self.next_page, self.refresh)
+        self._last_input = time.time()
+
+        def on_tap() -> None:
+            self._last_input = time.time()  # manual tap resets the carousel dwell
+            self.next_page()
+
+        self.backend.on_input(on_tap, self.refresh)
         self.refresh()
         self.draw()
         last_poll = time.time()
@@ -629,6 +639,9 @@ class App:
             if time.time() - last_poll >= POLL_SEC:
                 self.refresh()
                 last_poll = time.time()
+            if CAROUSEL_SEC > 0 and time.time() - self._last_input >= CAROUSEL_SEC:
+                self._last_input = time.time()
+                self.next_page()
             clock = time.strftime("%H:%M")
             if clock != last_clock:  # keep the footer clock honest
                 last_clock = clock

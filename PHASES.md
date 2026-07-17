@@ -117,10 +117,10 @@ Hardware on hand: Pi 5 + cooler + X1200 UPS (2×18650) + MHS-3.5" (480×320). Ze
 | Step | What | Status |
 |---|---|---|
 | H0 Mac-side | 480×320 landscape renderer + fb/touch backends (PNG-verified live); X1200 monitor (mock drill passes); nightly-dump timer; runbook §A–§D | ✅ |
-| H1 Flash | Pi OS Lite 64-bit, hostname `orrery`, ssh — **owner's hands** | ⬜ |
-| H2 Migration | Docker CE, restore soak via pg_dump, retire Mac stack, OPS alerts on | ⬜ (ssh session) |
-| H3 Display | piscreen overlay, fb1 confirm, display service, touch | ⬜ (ssh session) |
-| H4 UPS drill | i2c 0x36, PLD confirm, pull-the-plug + graceful-stop test | ⬜ (ssh session) |
+| H1 Flash | Pi OS **trixie** Lite 64-bit; WiFi needed a cloud-init re-arm + **5 GHz band pin** (display SPI desenses 2.4 GHz — DECISIONS #83) | ✅ 2026-07-17 |
+| H2 Migration | 5-second cutover, 1 bucket lost (within standard); stack self-heals on boot; Mac retired to viewer; OPS alerts on | ✅ — soak clock intact |
+| H3 Display | fb0 @ 480×320 live dashboard; touch electrically marginal → **carousel mode** (15s auto-cycle); verified by fb readback | ✅ |
+| H4 UPS drill | Monitor live (gauge + PLD + status file); **drill deferred until cells charge** (arrived at 0%) | ⏳ owner runs when SOC > 50% |
 
 ## Phases 2+ — sketches only (one paragraph each, contingent on the gate)
 
