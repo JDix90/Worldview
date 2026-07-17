@@ -186,6 +186,8 @@ Running log. Every non-obvious choice gets a line: what was decided, why, what w
 
 75. **Perf gate honesty: in-pane absolute frame times are unreliable; gate on deltas.** Same-scene readings ranged 5.2–9.4ms within minutes on a busy machine (Docker restart, Vite, pane pipeline) vs 1.4ms historical. The reliable measurement: A/B with the new layers toggled — lanes+currents measured *below the noise floor* (the "with" run beat the "without" run). Documented so future gates don't chase environmental ghosts.
 
+76. **Live vessels: the AIS firehose lives in a Web Worker (satellites precedent).** aisstream.io global subscription is ~300 msg/s; the worker owns the WebSocket (subscription must be sent within 3s of connect — service requirement), keeps per-MMSI latest state (60k cap, 30-min purge), and posts transferable typed-array snapshots at 1Hz; the main thread packs 20k instanced sea-level diamonds colored by AIS type bucket (cargo/tanker/passenger/fishing/other) and re-packs only on snapshot or zoom change. Cards fetch full vessel state from the worker on click (name, type, speed, course, destination, MMSI; vesselfinder details link). Envelope shapes taken from aisstream's documentation with a tolerant parser + unknown-shape diagnostics (a sample of the first unrecognized message is logged) because the live stream can't be probed keyless — **first live contact should be watched in the console** for `[vessels]` msg-rate stats and any envelope warnings. No-key path verified: clean warn, layer idle.
+
 ### Assumptions pending owner confirmation
 
 - OpenSky registered account + API client will be created by the owner; credentials into `.env`. **Blocks the collector chunk.**

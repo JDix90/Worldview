@@ -19,6 +19,7 @@ export default defineConfig(({ mode }) => {
     define: {
       __ORRERY_TOKEN__: JSON.stringify(env.ORRERY_AUTH_TOKEN ?? ''),
       __FIRMS_KEY__: JSON.stringify(env.FIRMS_MAP_KEY ?? ''),
+      __AISSTREAM_KEY__: JSON.stringify(env.AISSTREAM_KEY ?? ''),
     },
     server: {
       proxy: {

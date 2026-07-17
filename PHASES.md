@@ -96,7 +96,7 @@ Civil aircraft cards now show FROM/TO airports (adsbdb callsign lookup, client-d
 |---|---|---|
 | M1 Shipping lanes | World Bank AIS density → one-time GDAL bake → 7MB vendored PNG drape | ✅ verified — Malacca/Singapore corridors blaze, geographically aligned with borders |
 | M2 Ocean currents | Open-Meteo Marine (10° grid, km/h + flowing-TOWARD conventions verified) | ✅ verified — field byte-faithful to source; streamline cadence designed for 60fps displays |
-| M3 Live vessels | aisstream.io WebSocket (global AIS) | ⏳ code next; **blocked on owner's free AISSTREAM_KEY in .env** |
+| M3 Live vessels | aisstream.io WebSocket (global AIS) | ⏳ code complete (worker + renderer + card, no-key idle verified); **live stream verification awaits owner's free AISSTREAM_KEY in .env** |
 
 Perf: lanes+currents cost below measurement noise (delta A/B — see #75 on in-pane absolute numbers).
 

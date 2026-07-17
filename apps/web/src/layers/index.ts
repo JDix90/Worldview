@@ -17,6 +17,7 @@ import { windLayer } from './wind/wind';
 import { bordersLayer } from './borders';
 import { shippingLanesLayer } from './shippingLanes';
 import { currentsLayer } from './ocean/currents';
+import { vesselsLayer } from './vessels/vessels';
 
 export function buildLayerDefs(deps: { milStore: AircraftStore }): LayerDef[] {
   return [
@@ -50,6 +51,7 @@ export function buildLayerDefs(deps: { milStore: AircraftStore }): LayerDef[] {
       init: () => ({ dispose() {} }),
     },
     makeMilLayer(deps.milStore),
+    vesselsLayer,
     windLayer,
     currentsLayer,
     shippingLanesLayer,
