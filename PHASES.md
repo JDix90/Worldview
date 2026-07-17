@@ -90,6 +90,16 @@ Owner: the click cards were "unintelligible to the average viewer". Every card n
 
 Civil aircraft cards now show FROM/TO airports (adsbdb callsign lookup, client-direct, cached) and a SHOW/HIDE FLIGHT PATH button that draws the great-circle route (departure→aircraft→destination) as a visible tube with airport dots. The old registration-country row was relabeled REGISTRY. Verified live: ACA844 Montréal→Frankfurt. Client-only, soak untouched. **Phase 1.5e complete.**
 
+## Phase 1.5f — The ocean (2026-07-17, DECISIONS #73–75)
+
+| Layer | Source / path | Status |
+|---|---|---|
+| M1 Shipping lanes | World Bank AIS density → one-time GDAL bake → 7MB vendored PNG drape | ✅ verified — Malacca/Singapore corridors blaze, geographically aligned with borders |
+| M2 Ocean currents | Open-Meteo Marine (10° grid, km/h + flowing-TOWARD conventions verified) | ✅ verified — field byte-faithful to source; streamline cadence designed for 60fps displays |
+| M3 Live vessels | aisstream.io WebSocket (global AIS) | ⏳ code next; **blocked on owner's free AISSTREAM_KEY in .env** |
+
+Perf: lanes+currents cost below measurement noise (delta A/B — see #75 on in-pane absolute numbers).
+
 ## Phases 2+ — sketches only (one paragraph each, contingent on the gate)
 
 **Phase 2 — Second layer.** Add one more collector through the existing seams — candidate chosen *at the time* by what Phase 1 taught us (likely candidates: earthquakes/USGS for its clean feed, or weather overlay for globe beauty; but the gate review decides). The test of the architecture: a new source should be an adapter, a baseline config, and detectors — no changes to stages' contracts. Real NOTAM integration for the analyst belongs here if the traffic-collapse detector proved useful.

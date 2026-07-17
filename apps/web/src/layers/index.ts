@@ -15,6 +15,8 @@ import { sunMoonLayer } from './sunmoon';
 import { aerosolLayer } from './aerosol';
 import { windLayer } from './wind/wind';
 import { bordersLayer } from './borders';
+import { shippingLanesLayer } from './shippingLanes';
+import { currentsLayer } from './ocean/currents';
 
 export function buildLayerDefs(deps: { milStore: AircraftStore }): LayerDef[] {
   return [
@@ -49,6 +51,8 @@ export function buildLayerDefs(deps: { milStore: AircraftStore }): LayerDef[] {
     },
     makeMilLayer(deps.milStore),
     windLayer,
+    currentsLayer,
+    shippingLanesLayer,
     cyclonesLayer,
     wildfiresLayer,
     aerosolLayer,
