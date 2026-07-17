@@ -1,0 +1,19 @@
+[Unit]
+Description=ORRERY duty-officer pager (Whisplay LCD)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust user/paths to your Pi. The venv must have requests/Pillow/numpy and
+# the vendored whisplay driver on PYTHONPATH.
+User=pi
+WorkingDirectory=/home/pi/Project_Worldview/edge/pager
+EnvironmentFile=/home/pi/Project_Worldview/edge/pager/pager.env
+Environment=PYTHONPATH=/home/pi/whisplay/runtime
+ExecStart=/home/pi/pager-venv/bin/python /home/pi/Project_Worldview/edge/pager/orrery_pager.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

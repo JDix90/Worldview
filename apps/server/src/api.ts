@@ -112,6 +112,68 @@ export function registerApi(
       return { regions };
     });
 
+    // ── Pager summary: one compact Stage-4 digest for the Zero 2 W handheld ──
+    // The handheld stays dumb — it renders this, never touches raw data. Keep
+    // the payload small (~2KB): the pager polls it every 90s over 2.4GHz WiFi.
+    scope.get('/api/pager/summary', async () => {
+      const nowMs = Date.now();
+      const [signals, briefing, shadow24h] = await Promise.all([
+        pool.query(
+          `SELECT s.severity, s.ts, s.payload->>'what' AS what,
+                  s.payload->'where'->>'region' AS region, a.disposition
+           FROM signal s LEFT JOIN assessment a ON a.signal_id = s.id
+           WHERE s.severity IN ('S1','S2') ORDER BY s.ts DESC LIMIT 5`,
+        ),
+        pool.query(`SELECT date_local, body_md, quiet FROM briefing ORDER BY date_local DESC LIMIT 1`),
+        pool.query(`SELECT count(*)::int AS n FROM shadow_push WHERE ts >= now() - interval '24 hours'`),
+      ]);
+
+      const integrity = await Promise.all(
+        GPS_WATCH_REGIONS.map(async (region) => {
+          const raw = await redis.get(REDIS_KEYS.hotIntegrity(region.id));
+          let fraction: number | null = null;
+          if (raw) {
+            const parsed = JSON.parse(raw) as { fetchedAt: number; aircraft: Array<{ nic?: number }> };
+            const withNic = parsed.aircraft.filter((a) => typeof a.nic === 'number');
+            const stale = nowMs / 1000 - parsed.fetchedAt > 600;
+            if (!stale && withNic.length > 0) {
+              fraction = withNic.filter((a) => (a.nic as number) <= 4).length / withNic.length;
+            }
+          }
+          const verdict =
+            fraction === null ? 'no-data' : fraction < 0.15 ? 'nominal' : fraction < 0.45 ? 'elevated' : 'severe';
+          return { name: region.name, verdict, pct: fraction === null ? null : Math.round(fraction * 100) };
+        }),
+      );
+
+      const b = briefing.rows[0] as { date_local: string; body_md: string; quiet: boolean } | undefined;
+      const briefLines = (b?.body_md ?? '')
+        .split('\n')
+        .map((l) => l.replace(/^#+\s*/, '').trim())
+        .filter(Boolean);
+
+      return {
+        generatedAt: new Date(nowMs).toISOString(),
+        feed: {
+          live: feed.liveCount() > 0 && nowMs / 1000 - feed.snapshotFetchedAt() < 300,
+          aircraft: feed.liveCount(),
+          dataAgeS: Math.max(0, Math.round(nowMs / 1000 - feed.snapshotFetchedAt())),
+        },
+        signals: signals.rows.map((r) => ({
+          severity: r.severity as string,
+          what: r.what as string,
+          region: r.region as string | null,
+          disposition: r.disposition as string | null,
+          ageS: Math.max(0, Math.round((nowMs - new Date(r.ts as string).getTime()) / 1000)),
+        })),
+        briefing: b
+          ? { date: b.date_local, quiet: b.quiet, headline: briefLines[0] ?? '', open: briefLines.slice(1, 4).join(' ').slice(0, 240) }
+          : null,
+        integrity,
+        shadowS1Last24h: shadow24h.rows[0].n as number,
+      };
+    });
+
     // ── upstream proxies for furniture layers whose sources lack CORS ──
     // (NHC storms; FIRMS fires as fallback). Cached in-memory; stale copies
     // are served when the upstream hiccups — furniture degrades, never errors.

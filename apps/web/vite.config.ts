@@ -6,6 +6,10 @@ export default defineConfig(({ mode }) => {
   // Root .env is the single source of truth; third arg '' loads unprefixed vars.
   const env = loadEnv(mode, path.resolve(__dirname, '../..'), '');
   const serverPort = env.ORRERY_SERVER_PORT || '8787';
+  // Where the dev proxy forwards /ws, /api, /healthz. Defaults to the local
+  // stack; point at the Pi 5 appliance's LAN IP (ORRERY_API_HOST=192.168.x.y)
+  // to run the Mac browser against the Pi-hosted backend.
+  const apiHost = env.ORRERY_API_HOST || '127.0.0.1';
 
   return {
     plugins: [react()],
@@ -23,9 +27,9 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       proxy: {
-        '/ws': { target: `ws://127.0.0.1:${serverPort}`, ws: true },
-        '/healthz': { target: `http://127.0.0.1:${serverPort}` },
-        '/api': { target: `http://127.0.0.1:${serverPort}` },
+        '/ws': { target: `ws://${apiHost}:${serverPort}`, ws: true },
+        '/healthz': { target: `http://${apiHost}:${serverPort}` },
+        '/api': { target: `http://${apiHost}:${serverPort}` },
       },
     },
   };

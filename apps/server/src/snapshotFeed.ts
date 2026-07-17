@@ -64,6 +64,11 @@ export class SnapshotFeed {
     return this.fetchedAt;
   }
 
+  /** Live aircraft count (for the pager summary — avoids serializing the set). */
+  liveCount(): number {
+    return this.byHex.size;
+  }
+
   /** Airborne aircraft currently in a grid cell (live observed count for the baseline API). */
   countInCell(cellId: string): number {
     let n = 0;

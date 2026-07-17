@@ -100,6 +100,16 @@ Civil aircraft cards now show FROM/TO airports (adsbdb callsign lookup, client-d
 
 Perf: lanes+currents cost below measurement noise (delta A/B — see #75 on in-pane absolute numbers).
 
+## Phase 1.5g — Edge hardware (2026-07-17, DECISIONS #77–79; docs/EDGE.md)
+
+Assessment + build in response to "Pi Zero 2 W handheld or Pi 5?". Verdicts: globe **cannot** run on the Zero 2 W (RAM); the handheld is the **duty-officer pager**; the Pi 5 is the **appliance backend** (ends Mac/Docker soak fragility).
+
+| Deliverable | What shipped | Status |
+|---|---|---|
+| EDGE.md assessment | Role-by-role analysis, arm64 verification, BOM, non-goals | ✅ |
+| Pi 5 appliance prep | Compose LAN bind + web proxy target parametrized (Mac default unchanged); RUNBOOK-PI5.md with soak-preserving `pg_dump` migration | ✅ prepped (build when hardware arrives) |
+| Zero 2 W pager | `GET /api/pager/summary` (~1.8KB, authed, four-stage-clean) + `edge/pager/` Python client (5 pages, 1-button, RGB LED); all pages verified off-device via PNG render | ✅ code complete (on-device bring-up when handheld is connected) |
+
 ## Phases 2+ — sketches only (one paragraph each, contingent on the gate)
 
 **Phase 2 — Second layer.** Add one more collector through the existing seams — candidate chosen *at the time* by what Phase 1 taught us (likely candidates: earthquakes/USGS for its clean feed, or weather overlay for globe beauty; but the gate review decides). The test of the architecture: a new source should be an adapter, a baseline config, and detectors — no changes to stages' contracts. Real NOTAM integration for the analyst belongs here if the traffic-collapse detector proved useful.
