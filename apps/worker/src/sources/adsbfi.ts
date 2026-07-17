@@ -28,6 +28,8 @@ interface AdsbfiAircraft {
   hex?: string;
   flight?: string;
   t?: string; // airframe type code
+  desc?: string; // long human type name, e.g. "BOEING KC-135R Stratotanker"
+  ownOp?: string; // owner/operator
   r?: string; // registration
   lat?: number;
   lon?: number;
@@ -54,12 +56,20 @@ const KT_TO_MS = 0.514444;
 const FT_TO_M = 0.3048;
 const FPM_TO_MS = 0.00508;
 
+// adsb.fi's desc/ownOp are already human-readable ("Boeing C-17A Globemaster
+// III", "Department Of The Air Force (USAF)"). Case is inconsistent but any
+// normalization mangles model codes (KC-135R/T) or acronyms (USAF) — so we
+// pass them through verbatim, just trimmed/emptied.
+const clean = (s: string | undefined): string | undefined => s?.trim() || undefined;
+
 function normalize(ac: AdsbfiAircraft, nowSec: number): AircraftState | null {
   if (!ac.hex || typeof ac.lat !== 'number' || typeof ac.lon !== 'number') return null;
   return {
     hex: ac.hex.toLowerCase(),
     callsign: ac.flight?.trim() || undefined,
     typeCode: ac.t,
+    typeDesc: clean(ac.desc),
+    operator: clean(ac.ownOp),
     registration: ac.r?.trim() || undefined,
     lat: ac.lat,
     lon: ac.lon,

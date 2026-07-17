@@ -10,7 +10,8 @@ import { latLngToWorld } from '../globe/surfaceMath';
 
 const API = 'https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=30&hide_recent_previous=true';
 const REFRESH_MS = 20 * 60_000;
-const CACHE_KEY = 'orrery:ll2';
+// v2: cache shape gained mission/provider fields — old caches must not half-populate
+const CACHE_KEY = 'orrery:ll2:v2';
 const PICK_RADIUS_PX = 22;
 const MAX_PADS = 40;
 /** Only show launches inside this horizon — pads with a launch next month are noise. */
@@ -21,6 +22,8 @@ interface Ll2Launch {
   net?: string;
   status?: { abbrev?: string; name?: string };
   rocket?: { configuration?: { full_name?: string } };
+  mission?: { name?: string; description?: string; orbit?: { name?: string } };
+  launch_service_provider?: { name?: string };
   pad?: {
     name?: string;
     latitude?: string | number;
@@ -38,15 +41,27 @@ interface Launch {
   location: string;
   lat: number;
   lon: number;
+  missionName: string | null;
+  missionDesc: string | null;
+  orbit: string | null;
+  provider: string | null;
 }
 
 function tMinus(netMs: number): string {
   const dMs = netMs - Date.now();
-  const sign = dMs < 0 ? 'T+' : 'T−';
   const a = Math.abs(dMs);
-  const h = Math.floor(a / 3600_000);
+  const d = Math.floor(a / 86400_000);
+  const h = Math.floor((a % 86400_000) / 3600_000);
   const min = Math.floor((a % 3600_000) / 60_000);
-  return h > 48 ? `${sign}${Math.round(h / 24)}d` : `${sign}${h}h ${String(min).padStart(2, '0')}m`;
+  const span = d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${String(min).padStart(2, '0')}m` : `${min}m`;
+  return dMs < 0 ? `launched ${span} ago` : span;
+}
+
+/** First sentence of the mission blurb, capped for the card. */
+function blurb(desc: string | null): string {
+  if (!desc) return 'No mission details published yet.';
+  const first = desc.split(/(?<=[.!?])\s/)[0] ?? desc;
+  return first.length > 150 ? first.slice(0, 147).trimEnd() + '…' : first;
 }
 
 const vertexShader = /* glsl */ `
@@ -138,12 +153,17 @@ export const launchesLayer: LayerDef = {
           return {
             name: l.name ?? 'Unknown',
             netMs,
-            status: l.status?.abbrev ?? '?',
+            // full status.name ("Go for Launch"), not the abbrev ("Go")
+            status: l.status?.name ?? l.status?.abbrev ?? '?',
             vehicle: l.rocket?.configuration?.full_name ?? '',
             pad: l.pad?.name ?? '',
             location: l.pad?.location?.name ?? '',
             lat,
             lon,
+            missionName: l.mission?.name ?? null,
+            missionDesc: l.mission?.description ?? null,
+            orbit: l.mission?.orbit?.name ?? null,
+            provider: l.launch_service_provider?.name ?? null,
           };
         })
         .filter((l): l is Launch => l !== null);
@@ -197,13 +217,15 @@ export const launchesLayer: LayerDef = {
         d2: best.d2,
         open: () =>
           ctx.setCard({
-            title: l.name.split('|')[1]?.trim() || l.name,
-            subtitle: 'launch',
+            title: l.missionName ?? (l.name.split('|')[1]?.trim() || l.name),
+            subtitle: l.provider ? `launch · ${l.provider}` : 'launch',
+            note: blurb(l.missionDesc),
             rows: [
-              ...(l.vehicle ? [{ label: 'VEHICLE', value: l.vehicle }] : []),
-              { label: 'NET', value: new Date(l.netMs).toISOString().slice(0, 16).replace('T', ' ') + 'Z' },
-              { label: 'COUNT', value: `${tMinus(l.netMs)} (at click)` },
+              { label: 'LIFTOFF', value: new Date(l.netMs).toISOString().slice(0, 16).replace('T', ' ') + 'Z' },
+              { label: 'T-MINUS', value: tMinus(l.netMs) },
               { label: 'STATUS', value: l.status },
+              ...(l.orbit ? [{ label: 'ORBIT', value: l.orbit }] : []),
+              ...(l.vehicle ? [{ label: 'VEHICLE', value: l.vehicle }] : []),
               { label: 'PAD', value: l.pad },
               { label: 'SITE', value: l.location },
             ],

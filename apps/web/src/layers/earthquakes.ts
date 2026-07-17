@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import type { LayerCtx, LayerDef, LayerInstance } from './registry';
 import { latLngToWorld } from '../globe/surfaceMath';
+import { agoShort, utcShort } from '../format';
 
 const FEED_URL = 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson';
 const REFRESH_MS = 5 * 60_000;
@@ -21,6 +22,23 @@ interface Quake {
   lat: number;
   lon: number;
   url: string;
+  felt: number | null;
+  alert: string | null;
+  tsunami: number;
+}
+
+/** Plain-language read of the magnitude (USGS/Mercalli-informed thresholds). */
+function magNote(mag: number): string {
+  if (mag < 3) return 'Minor — rarely felt.';
+  if (mag < 4) return 'Minor — often felt, rarely causes damage.';
+  if (mag < 5) return 'Light — noticeable shaking near the epicenter.';
+  if (mag < 6) return 'Moderate — can damage weak structures.';
+  if (mag < 7) return 'Strong — damaging near the epicenter.';
+  return 'Major — serious damage likely over a wide area.';
+}
+
+function depthWord(depthKm: number): string {
+  return depthKm < 70 ? 'shallow' : depthKm <= 300 ? 'intermediate' : 'deep';
 }
 
 function magScale(mag: number): number {
@@ -108,7 +126,15 @@ export const earthquakesLayer: LayerDef = {
         const data = (await res.json()) as {
           features: Array<{
             id: string;
-            properties: { mag: number | null; place: string | null; time: number; url: string };
+            properties: {
+              mag: number | null;
+              place: string | null;
+              time: number;
+              url: string;
+              felt: number | null;
+              alert: string | null;
+              tsunami: number;
+            };
             geometry: { coordinates: [number, number, number] };
           }>;
         };
@@ -124,6 +150,9 @@ export const earthquakesLayer: LayerDef = {
             lat: f.geometry.coordinates[1],
             lon: f.geometry.coordinates[0],
             url: f.properties.url,
+            felt: f.properties.felt,
+            alert: f.properties.alert,
+            tsunami: f.properties.tsunami ?? 0,
           }));
         rebuild();
       } catch (err) {
@@ -154,11 +183,18 @@ export const earthquakesLayer: LayerDef = {
           ctx.setCard({
             title: `M${qk.mag.toFixed(1)}`,
             subtitle: 'earthquake',
+            note: magNote(qk.mag),
             rows: [
               { label: 'PLACE', value: qk.place },
-              { label: 'DEPTH', value: `${Math.round(qk.depthKm)} km` },
-              { label: 'TIME', value: new Date(qk.timeMs).toISOString().slice(5, 16).replace('T', ' ') + 'Z' },
-              { label: 'AGE', value: `${((Date.now() - qk.timeMs) / 3600_000).toFixed(1)} h` },
+              { label: 'DEPTH', value: `${Math.round(qk.depthKm)} km (${depthWord(qk.depthKm)})` },
+              { label: 'TIME', value: `${agoShort(qk.timeMs)} · ${utcShort(qk.timeMs)}` },
+              ...(qk.felt ? [{ label: 'FELT', value: `${qk.felt.toLocaleString()} public reports` }] : []),
+              ...(qk.alert && qk.alert !== 'green'
+                ? [{ label: 'ALERT', value: `PAGER ${qk.alert} — impact expected` }]
+                : []),
+              ...(qk.tsunami === 1
+                ? [{ label: 'TSUNAMI', value: 'flagged — see details for advisories' }]
+                : []),
             ],
             href: qk.url,
           }),

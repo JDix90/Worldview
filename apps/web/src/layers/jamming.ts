@@ -9,6 +9,15 @@ import { GPS_WATCH_REGIONS } from '@orrery/shared';
 import type { LayerCtx, LayerDef, LayerInstance } from './registry';
 import { apiGet } from '../feed/api';
 import { latLngToWorld, GLOBE_RADIUS } from '../globe/surfaceMath';
+import { agoShort } from '../format';
+
+/** Verdict line from the degraded fraction (same thresholds as the disc color). */
+function jammingNote(fraction: number | null | undefined): string {
+  if (fraction === null || fraction === undefined) return 'No recent sweep data for this region.';
+  if (fraction < 0.15) return 'NOMINAL — no significant GPS interference detected.';
+  if (fraction < 0.45) return 'ELEVATED — an unusual share of aircraft report degraded GPS.';
+  return 'SEVERE — widespread GPS degradation across this region.';
+}
 
 const REFRESH_MS = 60_000;
 const PICK_RADIUS_PX = 40;
@@ -113,14 +122,18 @@ export const jammingLayer: LayerDef = {
           ctx.setCard({
             title: region.name.toUpperCase(),
             subtitle: 'GPS integrity',
+            note: jammingNote(r?.fraction),
             rows: [
               {
                 label: 'DEGRADED',
-                value: r && r.fraction !== null ? `${Math.round(r.fraction * 100)}% of ${r.aircraft} aircraft` : 'no data',
+                value:
+                  r && r.fraction !== null
+                    ? `${Math.round(r.fraction * 100)}% of ${r.aircraft} aircraft`
+                    : 'no data',
               },
-              { label: 'MEANS', value: 'share of aircraft reporting NIC ≤ 4' },
-              { label: 'SCALE', value: 'green <15% · amber ~30% · red ≥45%' },
-              ...(r ? [{ label: 'SWEPT', value: `${Math.max(0, Math.round(Date.now() / 1000 - r.fetchedAt))}s ago` }] : []),
+              { label: 'MEANS', value: 'aircraft broadcasting low position accuracy (GPS NIC ≤ 4)' },
+              { label: 'SCALE', value: 'nominal <15% · elevated ~30% · severe ≥45%' },
+              ...(r ? [{ label: 'CHECKED', value: agoShort(r.fetchedAt * 1000) }] : []),
             ],
           });
         },

@@ -82,6 +82,10 @@ Owner feedback after the composite shipped: spin frustration, flight clutter, cl
 
 Perf all-on at the fire worst case: 3.1 ms — under the 5 ms gate.
 
+## Phase 1.5d — Detail-card clarity (2026-07-17, DECISIONS #68–70)
+
+Owner: the click cards were "unintelligible to the average viewer". Every card now leads with a plain-language `note`, uses full-word labels, relative+UTC times, dual kt·mph speeds, and hemisphere coordinates (shared `format.ts`). Surfaced already-fetched-but-dropped fields (LL2 mission/status/orbit, USGS felt/alert/tsunami, TLE inclination). Military cards enriched with adsb.fi `desc`/`ownOp` (worker rebuilt, soak intact) → "Boeing C-17A Globemaster III"; civil cards get an airline name from a curated ICAO-prefix map. Verified live: civil, military, sun, and launch cards. **Phase 1.5d complete.**
+
 ## Phases 2+ — sketches only (one paragraph each, contingent on the gate)
 
 **Phase 2 — Second layer.** Add one more collector through the existing seams — candidate chosen *at the time* by what Phase 1 taught us (likely candidates: earthquakes/USGS for its clean feed, or weather overlay for globe beauty; but the gate review decides). The test of the architecture: a new source should be an adapter, a baseline config, and detectors — no changes to stages' contracts. Real NOTAM integration for the analyst belongs here if the traffic-collapse detector proved useful.

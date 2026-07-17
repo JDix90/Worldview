@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import type { LayerCtx, LayerDef, LayerInstance } from './registry';
 import type { AircraftStore } from '../feed/aircraftStore';
 import { latLngToWorld, writeHeadingMatrix, GLOBE_RADIUS, EARTH_RADIUS_M } from '../globe/surfaceMath';
+import { agoShort, compass16, ftFromM, ktMph, squawkNote, MS_TO_KT, MS_TO_FPM } from '../format';
 
 const MAX_INSTANCES = 3000;
 const BASE_CLEARANCE = 0.5;
@@ -58,17 +59,38 @@ export function makeMilLayer(store: AircraftStore): LayerDef {
             const t = store.byHex.get(hex);
             if (!t) return;
             const s = t.state;
+            // enriched type/operator (adsb.fi desc/ownOp) when the feed carries them
+            const aircraftLine =
+              s.typeDesc && s.typeCode ? `${s.typeDesc} (${s.typeCode})`
+              : s.typeDesc ?? s.typeCode;
+            const note =
+              s.typeDesc && s.operator ? `${s.typeDesc} — ${s.operator}`
+              : s.typeDesc ?? undefined;
             ctx.setCard({
               title: s.callsign ?? hex.toUpperCase(),
-              subtitle: 'military',
+              subtitle: 'military aircraft',
+              note,
               rows: [
-                ...(s.typeCode ? [{ label: 'TYPE', value: s.typeCode }] : []),
-                ...(s.registration ? [{ label: 'REG', value: s.registration }] : []),
+                ...(aircraftLine ? [{ label: 'AIRCRAFT', value: aircraftLine }] : []),
+                ...(s.operator ? [{ label: 'OPERATOR', value: s.operator }] : []),
+                ...(s.registration ? [{ label: 'TAIL №', value: s.registration }] : []),
+                { label: 'ALTITUDE', value: s.altBaroM !== undefined ? ftFromM(s.altBaroM) : '—' },
+                { label: 'SPEED', value: s.groundSpeedMs !== undefined ? ktMph(s.groundSpeedMs * MS_TO_KT) : '—' },
+                {
+                  label: 'HEADING',
+                  value: s.trackDeg !== undefined ? `${Math.round(s.trackDeg)}° ${compass16(s.trackDeg)}` : '—',
+                },
+                ...(s.verticalRateMs !== undefined
+                  ? [
+                      {
+                        label: 'CLIMB',
+                        value: `${s.verticalRateMs >= 0 ? '+' : ''}${Math.round(s.verticalRateMs * MS_TO_FPM).toLocaleString()} ft/min`,
+                      },
+                    ]
+                  : []),
+                ...(s.squawk ? [{ label: 'SQUAWK', value: `${s.squawk}${squawkNote(s.squawk)}` }] : []),
+                { label: 'SEEN', value: agoShort(s.seenAt * 1000) },
                 { label: 'HEX', value: hex },
-                { label: 'ALT', value: s.altBaroM !== undefined ? `${Math.round(s.altBaroM * 3.28084).toLocaleString()} ft` : '—' },
-                { label: 'GS', value: s.groundSpeedMs !== undefined ? `${Math.round(s.groundSpeedMs * 1.94384)} kt` : '—' },
-                { label: 'TRK', value: s.trackDeg !== undefined ? `${Math.round(s.trackDeg)}°` : '—' },
-                ...(s.squawk ? [{ label: 'SQK', value: s.squawk }] : []),
               ],
             });
           },

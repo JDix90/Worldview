@@ -21,6 +21,8 @@ export interface LayerCardRow {
 export interface LayerCard {
   title: string;
   subtitle?: string;
+  /** One plain-language line — what this is / whether it matters (duty-officer voice). */
+  note?: string;
   rows: LayerCardRow[];
   href?: string;
 }

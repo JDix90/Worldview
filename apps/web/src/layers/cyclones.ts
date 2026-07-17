@@ -9,6 +9,25 @@ import * as THREE from 'three';
 import type { LayerCtx, LayerDef, LayerInstance } from './registry';
 import { apiGet } from '../feed/api';
 import { latLngToWorld } from '../globe/surfaceMath';
+import { agoShort, compass16, ktMph, latLon, utcShort } from '../format';
+
+/** Plain-language read of storm strength (Saffir-Simpson from sustained kt). */
+function stormNote(classification: string, windsKt: number): string {
+  if (classification === 'TD') return 'Tropical depression — winds under 39 mph.';
+  if (classification === 'TS') return 'Tropical storm — sustained 39–73 mph.';
+  const mph = windsKt * 1.15078;
+  if (mph < 96) return 'Category 1 hurricane — some damage to homes and trees.';
+  if (mph < 111) return 'Category 2 hurricane — extensive damage, widespread power loss.';
+  if (mph < 130) return 'Category 3 hurricane — devastating damage (major).';
+  if (mph < 157) return 'Category 4 hurricane — catastrophic damage.';
+  return 'Category 5 hurricane — catastrophic; areas uninhabitable for weeks.';
+}
+
+/** NHC advisory timestamps parse cleanly; show relative + UTC, raw as fallback. */
+function advisoryAge(raw: string): string {
+  const ms = Date.parse(raw);
+  return Number.isFinite(ms) ? `${agoShort(ms)} · ${utcShort(ms)}` : raw;
+}
 
 const REFRESH_MS = 15 * 60_000;
 const PICK_RADIUS_PX = 26;
@@ -191,14 +210,24 @@ export const cyclonesLayer: LayerDef = {
           ctx.setCard({
             title: s.name.toUpperCase(),
             subtitle: CLASS_NAMES[s.classification] ?? s.classification,
+            note: stormNote(s.classification, s.windsKt),
             rows: [
-              { label: 'WINDS', value: `${s.windsKt} kt sustained` },
-              ...(s.pressureMb ? [{ label: 'PRESSURE', value: `${s.pressureMb} mb` }] : []),
-              ...(s.movementDir !== null
-                ? [{ label: 'MOVEMENT', value: `${Math.round(s.movementDir)}° at ${s.movementSpeed ?? '?'} kt` }]
+              { label: 'WINDS', value: `${ktMph(s.windsKt)} sustained` },
+              ...(s.pressureMb
+                ? [{ label: 'PRESSURE', value: `${s.pressureMb} mb (lower = stronger)` }]
                 : []),
-              { label: 'POSITION', value: `${s.lat.toFixed(1)}°, ${s.lon.toFixed(1)}°` },
-              ...(s.lastUpdate ? [{ label: 'ADVISORY', value: s.lastUpdate }] : []),
+              ...(s.movementDir !== null
+                ? [
+                    {
+                      label: 'MOVING',
+                      value: `${compass16(s.movementDir)} at ${s.movementSpeed ?? '?'} kt`,
+                    },
+                  ]
+                : []),
+              { label: 'POSITION', value: latLon(s.lat, s.lon, 1) },
+              ...(s.lastUpdate
+                ? [{ label: 'ADVISORY', value: advisoryAge(s.lastUpdate) }]
+                : []),
             ],
           }),
       };

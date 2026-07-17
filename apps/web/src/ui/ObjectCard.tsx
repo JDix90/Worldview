@@ -30,10 +30,13 @@ export function ObjectCard({ card, onClose }: { card: LayerCard; onClose: () => 
         <span style={{ flex: 1 }} />
         <span onClick={onClose} style={{ cursor: 'pointer', opacity: 0.6 }}>✕</span>
       </div>
+      {card.note && (
+        <div style={{ marginTop: 5, opacity: 0.75, lineHeight: 1.45 }}>{card.note}</div>
+      )}
       <div style={{ marginTop: 6 }}>
         {card.rows.map((r) => (
           <div key={r.label} style={{ display: 'flex', gap: 10 }}>
-            <span style={{ opacity: 0.5, minWidth: 88 }}>{r.label}</span>
+            <span style={{ opacity: 0.5, minWidth: 100 }}>{r.label}</span>
             <span>{r.value}</span>
           </div>
         ))}

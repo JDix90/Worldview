@@ -28,6 +28,10 @@ export interface AircraftState {
   originCountry?: string;
   /** Airframe type code, e.g. "F16" (adsb.fi registry data). */
   typeCode?: string;
+  /** Human airframe name, e.g. "Boeing KC-135R Stratotanker" (adsb.fi `desc`). */
+  typeDesc?: string;
+  /** Owner/operator, e.g. "UNITED STATES AIR FORCE" (adsb.fi `ownOp`). */
+  operator?: string;
   /** Registration / tail number (adsb.fi registry data). */
   registration?: string;
   /** Navigation Integrity Category (adsb.fi only) — the GPS-interference input. */

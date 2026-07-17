@@ -11,6 +11,18 @@ import { fetchTles, type Tle } from './tleSource';
 
 const TLE_REFRESH_MS = 6 * 3600_000;
 const PICK_RADIUS_PX = 14;
+/** CelesTrak group slug → [short label, plain-language note]. */
+const GROUP_INFO: Record<string, { label: string; note: string }> = {
+  stations: { label: 'Space station', note: 'Crewed orbital station in low Earth orbit.' },
+  'gps-ops': { label: 'GPS (US navigation)', note: 'US GPS navigation satellite, ~20,200 km up.' },
+  galileo: { label: 'Galileo (EU navigation)', note: 'European navigation satellite.' },
+  beidou: { label: 'BeiDou (China navigation)', note: 'Chinese navigation satellite.' },
+  'glo-ops': { label: 'GLONASS (Russia navigation)', note: 'Russian navigation satellite.' },
+  visual: { label: 'Bright object', note: 'Large enough to see with the naked eye at dusk or dawn.' },
+  weather: { label: 'Weather satellite', note: 'Geostationary weather satellite watching one face of Earth.' },
+  starlink: { label: 'Starlink', note: 'SpaceX broadband internet satellite in low Earth orbit.' },
+};
+
 const EARTH_R_KM = 6371;
 /** World units → km, for the speed readout. */
 const KM_PER_UNIT = EARTH_R_KM / GLOBE_RADIUS;
@@ -122,19 +134,29 @@ export function makeSatellitesLayer(opts: SatellitesOptions): LayerDef {
           const dz = posB[i * 3 + 2]! - posA[i * 3 + 2]!;
           speed = `${((Math.hypot(dx, dy, dz) * KM_PER_UNIT) / ((tB - tA) / 1000)).toFixed(1)} km/s`;
         }
+        const info = GROUP_INFO[tle.group];
+        const periodMin = Math.round(tle.periodMin);
+        const periodHrs = tle.periodMin / 60;
+        const periodStr =
+          periodHrs >= 1.5 ? `${periodMin} min (~${periodHrs.toFixed(1)} h per orbit)` : `${periodMin} min per orbit`;
         return {
           d2: best.d2,
           open: () =>
             ctx.setCard({
               title: tle.name,
               subtitle: 'satellite',
+              note: info?.note ?? 'Tracked orbital object.',
               rows: [
-                { label: 'NORAD', value: tle.noradId },
-                { label: 'GROUP', value: tle.group },
-                { label: 'ALT', value: altKm ? `${Math.round(altKm[i]!).toLocaleString()} km` : '—' },
+                { label: 'TYPE', value: info?.label ?? tle.group },
+                { label: 'ALTITUDE', value: altKm ? `${Math.round(altKm[i]!).toLocaleString()} km up` : '—' },
                 ...(speed ? [{ label: 'SPEED', value: speed }] : []),
-                { label: 'PERIOD', value: `${Math.round(tle.periodMin)} min` },
+                { label: 'ORBIT TIME', value: periodStr },
+                ...(Number.isFinite(tle.inclinationDeg)
+                  ? [{ label: 'INCLINATION', value: `${tle.inclinationDeg.toFixed(1)}° to the equator` }]
+                  : []),
+                { label: 'NORAD ID', value: tle.noradId },
               ],
+              href: `https://www.n2yo.com/satellite/?s=${tle.noradId}`,
             }),
         };
       });

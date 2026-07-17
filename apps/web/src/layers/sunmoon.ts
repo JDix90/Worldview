@@ -8,6 +8,9 @@ import type { LayerCtx, LayerDef, LayerInstance } from './registry';
 import { subsolarPoint } from '../globe/solar';
 import { sublunarPoint } from '../globe/lunar';
 import { latLngToWorld } from '../globe/surfaceMath';
+import { latLon } from '../format';
+
+const MOON_AVG_KM = 384400;
 
 const PICK_RADIUS_PX = 20;
 /** Above the aurora shell so the markers never get tinted. */
@@ -80,24 +83,47 @@ export const sunMoonLayer: LayerDef = {
       for (const [mesh, open] of [
         [sun, () => {
           const s = subsolarPoint(new Date());
+          const season =
+            s.lat >= 0
+              ? `${s.lat.toFixed(1)}°N — northern-hemisphere summer half`
+              : `${Math.abs(s.lat).toFixed(1)}°S — southern-hemisphere summer half`;
+          const eot = s.equationOfTimeMin;
           ctx.setCard({
             title: 'SUN',
             subtitle: 'subsolar point',
+            note: 'The point where the sun is directly overhead — the day side centers here.',
             rows: [
-              { label: 'OVERHEAD AT', value: `${s.lat.toFixed(1)}°, ${s.lng.toFixed(1)}°` },
-              { label: 'DECLINATION', value: `${s.lat.toFixed(2)}°` },
-              { label: 'EQN OF TIME', value: `${s.equationOfTimeMin.toFixed(1)} min` },
+              { label: 'OVERHEAD AT', value: latLon(s.lat, s.lng, 1) },
+              { label: 'SEASON', value: season },
+              {
+                label: 'CLOCK OFFSET',
+                value: `sundial ${eot >= 0 ? '+' : ''}${eot.toFixed(1)} min vs clock`,
+              },
             ],
           });
         }],
         [moon, () => {
+          const pct = Math.round(moonInfo.illumination * 100);
+          const distNote =
+            moonInfo.distanceKm > MOON_AVG_KM * 1.02 ? 'farther than average'
+            : moonInfo.distanceKm < MOON_AVG_KM * 0.98 ? 'closer than average'
+            : 'near average';
+          const phaseNote =
+            pct >= 99 ? 'Full moon — fully lit tonight.'
+            : pct <= 1 ? 'New moon — effectively dark.'
+            : moonInfo.waxing ? 'Waxing — growing toward full.'
+            : 'Waning — shrinking toward new.';
           ctx.setCard({
             title: 'MOON',
-            subtitle: moonInfo.phaseName,
+            subtitle: 'sublunar point',
+            note: phaseNote,
             rows: [
-              { label: 'OVERHEAD AT', value: `${moonInfo.lat.toFixed(1)}°, ${moonInfo.lng.toFixed(1)}°` },
-              { label: 'ILLUMINATED', value: `${Math.round(moonInfo.illumination * 100)}%` },
-              { label: 'DISTANCE', value: `${Math.round(moonInfo.distanceKm).toLocaleString()} km` },
+              { label: 'OVERHEAD AT', value: latLon(moonInfo.lat, moonInfo.lng, 1) },
+              { label: 'PHASE', value: `${moonInfo.phaseName} — ${pct}% lit` },
+              {
+                label: 'DISTANCE',
+                value: `${Math.round(moonInfo.distanceKm).toLocaleString()} km (${distNote})`,
+              },
             ],
           });
         }],

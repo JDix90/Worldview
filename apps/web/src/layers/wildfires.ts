@@ -10,6 +10,15 @@ import * as THREE from 'three';
 import type { LayerCtx, LayerDef, LayerInstance } from './registry';
 import { apiGet } from '../feed/api';
 import { latLngToWorld } from '../globe/surfaceMath';
+import { agoShort, latLon, utcShort } from '../format';
+
+/** FIRMS 'satellite' column → spacecraft name. */
+const SAT_NAMES: Record<string, string> = {
+  N20: 'NOAA-20 (VIIRS)',
+  '1': 'NOAA-20 (VIIRS)',
+  N: 'Suomi NPP (VIIRS)',
+  N21: 'NOAA-21 (VIIRS)',
+};
 
 const REFRESH_MS = 30 * 60_000;
 /**
@@ -196,18 +205,31 @@ export const wildfiresLayer: LayerDef = {
       if (!best) return null;
       const f = fires[best.i]!;
       const conf = f.confidence === 'h' ? 'high' : f.confidence === 'l' ? 'low' : 'nominal';
+      const size =
+        f.frp < 5 ? 'Small heat detection'
+        : f.frp < 50 ? 'Moderate fire activity'
+        : f.frp < 300 ? 'Large fire activity'
+        : 'Very intense fire activity';
+      const sat = SAT_NAMES[f.sensor] ?? f.sensor;
+      const detectedMs = Date.parse(`${f.acquired.replace(' ', 'T')}:00Z`);
       return {
         d2: best.d2,
         open: () =>
           ctx.setCard({
             title: `FIRE · ${f.frp.toFixed(0)} MW`,
-            subtitle: 'VIIRS detection',
+            subtitle: 'satellite detection',
+            note: `${size} — one ~375 m satellite pixel radiating ${f.frp.toFixed(0)} MW of heat.`,
             rows: [
-              { label: 'FRP', value: `${f.frp.toFixed(1)} MW` },
+              { label: 'INTENSITY', value: `${f.frp.toFixed(1)} MW (fire radiative power)` },
               { label: 'CONFIDENCE', value: conf },
-              { label: 'DETECTED', value: `${f.acquired}Z` },
-              { label: 'SENSOR', value: f.sensor },
-              { label: 'POSITION', value: `${f.lat.toFixed(2)}°, ${f.lon.toFixed(2)}°` },
+              {
+                label: 'DETECTED',
+                value: Number.isFinite(detectedMs)
+                  ? `${agoShort(detectedMs)} · ${utcShort(detectedMs)}`
+                  : `${f.acquired}Z`,
+              },
+              { label: 'SATELLITE', value: sat },
+              { label: 'POSITION', value: latLon(f.lat, f.lon) },
             ],
           }),
       };

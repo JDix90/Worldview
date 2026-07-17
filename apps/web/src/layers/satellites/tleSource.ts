@@ -19,6 +19,8 @@ export interface Tle {
   group: string;
   /** Orbital period in minutes, from the TLE mean motion. */
   periodMin: number;
+  /** Inclination in degrees, from TLE line 2. */
+  inclinationDeg: number;
 }
 
 const BASE = 'https://celestrak.org/NORAD/elements/gp.php';
@@ -81,6 +83,7 @@ function parseTleText(text: string, group: string): Tle[] {
       noradId: l1.slice(2, 7).trim(),
       group,
       periodMin: meanMotion > 0 ? 1440 / meanMotion : 0,
+      inclinationDeg: Number(l2.slice(8, 16)),
     });
   }
   return out;

@@ -1,31 +1,34 @@
 /**
  * Selected-aircraft readout. Data refreshes at 1Hz — the card shows the
  * reported state and its age; the marker on the globe is what interpolates.
+ * Visual pattern matches ObjectCard (label column, note line, 320 cap).
  */
 import { useEffect, useState } from 'react';
 import type { AircraftStore, Tracked } from '../feed/aircraftStore';
+import { agoShort, compass16, ftFromM, ktMph, squawkNote, MS_TO_KT, MS_TO_FPM } from '../format';
+import { airlineFromCallsign, CATEGORY_WORDS } from '../data/airlines';
 
-const M_TO_FT = 3.28084;
-const MS_TO_KT = 1.94384;
-const MS_TO_FPM = 196.85;
+const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 
 const panel: React.CSSProperties = {
   position: 'fixed',
   bottom: 14,
   left: 12,
-  minWidth: 220,
+  minWidth: 230,
+  maxWidth: 320,
   padding: '10px 12px',
-  font: '11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace',
-  color: 'rgba(200, 214, 229, 0.95)',
-  background: 'rgba(8, 12, 18, 0.82)',
+  font: `11px/1.6 ${mono}`,
+  color: 'rgba(200, 214, 229, 0.92)',
+  background: 'rgba(6, 10, 16, 0.88)',
   border: '1px solid rgba(79, 216, 255, 0.25)',
   borderRadius: 4,
+  backdropFilter: 'blur(4px)',
 };
 
 function row(label: string, value: string): JSX.Element {
   return (
-    <div key={label} style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
-      <span style={{ opacity: 0.55 }}>{label}</span>
+    <div key={label} style={{ display: 'flex', gap: 10 }}>
+      <span style={{ opacity: 0.5, minWidth: 100 }}>{label}</span>
       <span>{value}</span>
     </div>
   );
@@ -50,33 +53,43 @@ export function AircraftCard({
 
   if (!tracked) return null;
   const s = tracked.state;
-  const ageS = Math.max(0, Math.round(Date.now() / 1000 - s.seenAt));
   const lost = tracked.missingSinceMs !== null;
+
+  const airline = airlineFromCallsign(s.callsign);
+  const catWords = s.category !== undefined ? CATEGORY_WORDS[s.category] : undefined;
+  const note =
+    airline && catWords ? `${airline} — ${catWords}`
+    : airline ? `${airline} flight`
+    : catWords ? `Civil traffic — ${catWords}`
+    : undefined;
 
   return (
     <div style={panel}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-        <span style={{ color: '#4fd8ff', fontWeight: 600 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+        <span style={{ color: '#4fd8ff', fontWeight: 600, letterSpacing: 1 }}>
           {s.callsign ?? '(no callsign)'}
         </span>
-        <span
-          onClick={onClose}
-          style={{ cursor: 'pointer', opacity: 0.6, pointerEvents: 'auto' }}
-          title="deselect"
-        >
+        <span style={{ opacity: 0.55 }}>civil aircraft</span>
+        <span style={{ flex: 1 }} />
+        <span onClick={onClose} style={{ cursor: 'pointer', opacity: 0.6, pointerEvents: 'auto' }} title="deselect">
           ✕
         </span>
       </div>
-      {row('hex', s.hex)}
-      {s.originCountry !== undefined && row('origin', s.originCountry)}
-      {s.altBaroM !== undefined && row('alt', `${Math.round(s.altBaroM * M_TO_FT).toLocaleString()} ft`)}
-      {s.groundSpeedMs !== undefined && row('gs', `${Math.round(s.groundSpeedMs * MS_TO_KT)} kt`)}
-      {s.trackDeg !== undefined && row('trk', `${Math.round(s.trackDeg)}°`)}
-      {s.verticalRateMs !== undefined &&
-        row('v/s', `${s.verticalRateMs >= 0 ? '+' : ''}${Math.round(s.verticalRateMs * MS_TO_FPM)} fpm`)}
-      {s.squawk !== undefined && row('sqk', s.squawk)}
-      {s.category !== undefined && row('cat', s.category)}
-      {row('data age', `${ageS}s`)}
+      {note && <div style={{ marginTop: 5, opacity: 0.75, lineHeight: 1.45 }}>{note}</div>}
+      <div style={{ marginTop: 6 }}>
+        {s.originCountry !== undefined && row('ORIGIN', s.originCountry)}
+        {s.altBaroM !== undefined && row('ALTITUDE', ftFromM(s.altBaroM))}
+        {s.groundSpeedMs !== undefined && row('SPEED', ktMph(s.groundSpeedMs * MS_TO_KT))}
+        {s.trackDeg !== undefined && row('HEADING', `${Math.round(s.trackDeg)}° ${compass16(s.trackDeg)}`)}
+        {s.verticalRateMs !== undefined &&
+          row(
+            'CLIMB',
+            `${s.verticalRateMs >= 0 ? '+' : ''}${Math.round(s.verticalRateMs * MS_TO_FPM).toLocaleString()} ft/min`,
+          )}
+        {s.squawk !== undefined && row('SQUAWK', `${s.squawk}${squawkNote(s.squawk)}`)}
+        {row('SEEN', agoShort(s.seenAt * 1000))}
+        {row('HEX', s.hex)}
+      </div>
       {lost && (
         <div style={{ marginTop: 6, color: '#ffb300' }}>SIGNAL LOST — holding last vector</div>
       )}
