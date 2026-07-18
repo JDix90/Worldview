@@ -122,6 +122,17 @@ Hardware on hand: Pi 5 + cooler + X1200 UPS (2×18650) + MHS-3.5" (480×320). Ze
 | H3 Display | fb0 @ 480×320 live dashboard; touch electrically marginal → **carousel mode** (15s auto-cycle); verified by fb readback | ✅ |
 | H4 UPS drill | Monitor live (gauge + PLD + status file); **drill deferred until cells charge** (arrived at 0%) | ⏳ owner runs when SOC > 50% |
 
+## Phase 1.5i — Living planet + world events (2026-07-18, DECISIONS #89–91)
+
+| Layer | Source | Status |
+|---|---|---|
+| CLOUDS | GIBS MODIS true-color, cloud-keyed + terminator-faded | ✅ verified (Pacific storm systems; seam fixed via yesterday-first) |
+| WORLD EVENTS | GDACS client-direct, scoped to FL/VO/DR + non-NHC TCs | ✅ verified (53 events; East Africa drought card) |
+| SST / snow | GIBS | ❌ deferred on evidence — L2 SST 21.9% swath coverage, NDSI 0.8% |
+| Analyst world-context | GDACS → triage/briefing prompts | ⏸ deferred until the flights Go/No-Go gate closes (DECISIONS #89; briefing seam first when built) |
+
+Perf: 2.77 ms/frame, 18 layers. Both deployed to the appliance.
+
 ## Phases 2+ — sketches only (one paragraph each, contingent on the gate)
 
 **Phase 2 — Second layer.** Add one more collector through the existing seams — candidate chosen *at the time* by what Phase 1 taught us (likely candidates: earthquakes/USGS for its clean feed, or weather overlay for globe beauty; but the gate review decides). The test of the architecture: a new source should be an adapter, a baseline config, and detectors — no changes to stages' contracts. Real NOTAM integration for the analyst belongs here if the traffic-collapse detector proved useful.

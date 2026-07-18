@@ -18,6 +18,8 @@ import { bordersLayer } from './borders';
 import { shippingLanesLayer } from './shippingLanes';
 import { currentsLayer } from './ocean/currents';
 import { vesselsLayer } from './vessels/vessels';
+import { cloudsLayer } from './clouds';
+import { worldEventsLayer } from './worldEvents';
 
 export function buildLayerDefs(deps: { milStore: AircraftStore }): LayerDef[] {
   return [
@@ -57,8 +59,12 @@ export function buildLayerDefs(deps: { milStore: AircraftStore }): LayerDef[] {
     shippingLanesLayer,
     cyclonesLayer,
     wildfiresLayer,
+    // clouds mounts before aerosol: same renderOrder, so mount order makes
+    // smoke composite over cloud
+    cloudsLayer,
     aerosolLayer,
     earthquakesLayer,
+    worldEventsLayer,
     launchesLayer,
     jammingLayer,
     auroraLayer,
