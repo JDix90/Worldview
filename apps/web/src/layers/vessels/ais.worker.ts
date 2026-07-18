@@ -43,6 +43,11 @@ let unknownSampleSent = false;
 
 function connect(): void {
   ws = new WebSocket(WS_URL);
+  // aisstream delivers JSON as *binary* frames; the browser surfaces those as
+  // Blob by default (async to read), so JSON.parse(ev.data) throws on every
+  // message. Force ArrayBuffer and decode synchronously below. (Node's `ws`
+  // gave decodable Buffers, which hid this in every server-side test.)
+  ws.binaryType = 'arraybuffer';
   ws.onopen = () => {
     backoffMs = 1000;
     // must arrive within 3s of connect
@@ -56,8 +61,10 @@ function connect(): void {
   };
   ws.onmessage = (ev) => {
     msgCount++;
+    const text =
+      typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data as ArrayBuffer);
     try {
-      const env = JSON.parse(ev.data as string) as {
+      const env = JSON.parse(text) as {
         MessageType?: string;
         MetaData?: { MMSI?: number; ShipName?: string };
         Metadata?: { MMSI?: number; ShipName?: string };
@@ -69,7 +76,7 @@ function connect(): void {
         unknownCount++;
         if (!unknownSampleSent) {
           unknownSampleSent = true;
-          postMessage({ kind: 'diagnostic', sample: (ev.data as string).slice(0, 400) });
+          postMessage({ kind: 'diagnostic', sample: text.slice(0, 400) });
         }
         return;
       }

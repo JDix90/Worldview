@@ -77,7 +77,6 @@ export const vesselsLayer: LayerDef = {
     const pos = new THREE.Vector3();
     const proj = new THREE.Vector3();
     let lastPackedScale = -1;
-    let dirty = false;
 
     const worker = new Worker(new URL('./ais.worker.ts', import.meta.url), { type: 'module' });
     worker.onerror = (ev) => console.error('[vessels] worker error', ev.message ?? ev);
@@ -89,7 +88,9 @@ export const vesselsLayer: LayerDef = {
         snapF = msg.f as Float32Array;
         snapM = msg.mmsis as Float64Array;
         snapT = msg.types as Uint8Array;
-        dirty = true;
+        // Render on data arrival (1Hz), not only on the camera tick — vessels
+        // appear as soon as a snapshot lands, independent of the rAF loop.
+        pack();
       } else if (msg.kind === 'stats') {
         // visible in devtools; the message-rate number for the perf ledger
         console.debug('[vessels]', msg.msgPerSec, 'msg/s ·', msg.tracked, 'tracked ·', msg.unknownCount, 'unknown');
@@ -124,7 +125,8 @@ export const vesselsLayer: LayerDef = {
       });
     }
 
-    function pack(camDist: number): void {
+    function pack(): void {
+      const camDist = ctx.camera.position.length();
       const s = Math.min(Math.max(camDist / SCALE_DIST_REF, SCALE_MIN), SCALE_MAX);
       const n = Math.min(snapN, MAX_INSTANCES);
       const matrices = mesh.instanceMatrix.array as Float32Array;
@@ -172,11 +174,10 @@ export const vesselsLayer: LayerDef = {
 
     return {
       update(_nowMs, camDist) {
+        // re-pack only when the camera moved enough to change marker scale;
+        // data-driven packing happens on snapshot receipt above
         const s = Math.min(Math.max(camDist / SCALE_DIST_REF, SCALE_MIN), SCALE_MAX);
-        if (dirty || Math.abs(s - lastPackedScale) > 0.02) {
-          dirty = false;
-          pack(camDist);
-        }
+        if (Math.abs(s - lastPackedScale) > 0.02) pack();
       },
       dispose() {
         worker.terminate();
