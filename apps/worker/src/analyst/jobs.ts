@@ -122,6 +122,27 @@ export async function jobBriefing(db: Queryable): Promise<void> {
   await generateBriefing(db, client);
 }
 
+/**
+ * Interval-scheduled guard around jobBriefing (DECISIONS #93): runs every 15
+ * minutes; files the briefing once we're past the local briefing hour and
+ * today's row doesn't exist yet. Catch-up by design — an appliance that was
+ * powered off at 07:00 files late instead of never. Safe against races:
+ * generateBriefing upserts ON CONFLICT (date_local).
+ */
+export async function jobBriefingCheck(db: Queryable): Promise<void> {
+  const now = new Date();
+  const hourLocal = Number(
+    new Intl.DateTimeFormat('en-US', { timeZone: env.briefingTimezone, hour: 'numeric', hour12: false }).format(now),
+  );
+  if (hourLocal < env.briefingHourLocal) return;
+  // same formatter jobBriefing's insert uses — the guard must match the key
+  const dateLocal = new Intl.DateTimeFormat('en-CA', { timeZone: env.briefingTimezone }).format(now);
+  const { rows } = await db.query(`SELECT 1 FROM briefing WHERE date_local = $1`, [dateLocal]);
+  if (rows.length > 0) return;
+  log('briefing', 'daily briefing missing past the hour — filing now', { dateLocal, hourLocal });
+  await jobBriefing(db);
+}
+
 /** Ops watch: a collector that has been silent >30 min is worth a real alert. */
 export async function jobOpsWatch(redis: Redis): Promise<void> {
   const meta = await redis.hgetall(REDIS_KEYS.hotSnapshotMeta);

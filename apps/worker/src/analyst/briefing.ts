@@ -129,7 +129,11 @@ export async function generateBriefing(
   } else {
     const result = await client.call('briefing', {
       model: env.briefingModel,
-      max_tokens: 1200,
+      // claude-sonnet-5 runs adaptive thinking by default and max_tokens caps
+      // thinking + text COMBINED — at 1200 the thinking ate the budget and the
+      // briefing truncated mid-sentence (2026-07-20, DECISIONS #93). Headroom
+      // is cheap: the call stops at end_turn, so this is a ceiling not a spend.
+      max_tokens: 8192,
       system: BRIEFING_SYSTEM,
       messages: [{ role: 'user', content: buildBriefingPrompt(input) }],
     });

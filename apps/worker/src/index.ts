@@ -18,7 +18,7 @@ import {
 import { jobRollupDensity, jobCleanRollups } from './rollup/density.js';
 import { jobComputeBaselines } from './rollup/baselines.js';
 import { jobDetect } from './detect/jobDetect.js';
-import { jobAnalystPoll, jobBriefing, jobOpsWatch } from './analyst/jobs.js';
+import { jobAnalystPoll, jobBriefingCheck, jobOpsWatch } from './analyst/jobs.js';
 
 const COLLECTOR_QUEUE = 'collector';
 
@@ -34,6 +34,14 @@ const SCHEDULES: Record<string, number> = {
   'detect': 60_000,
   'analyst-poll': 60_000,
   'ops-watch': 5 * 60_000,
+  // Briefing rides the interval scheduler like everything else: the handler
+  // no-ops until past the local briefing hour, and jobBriefing's
+  // ON CONFLICT (date_local) upsert makes repeats harmless. The cron-pattern
+  // scheduler (`0 7 * * *` + tz) silently stopped iterating after one firing
+  // per worker boot (BullMQ 5.73 job-scheduler; briefings 07-17/19/20 lost —
+  // DECISIONS #93). Interval + guard also gives catch-up semantics: an
+  // appliance that was off at 07:00 files late instead of never.
+  'briefing-check': 15 * 60_000,
 };
 
 async function main(): Promise<void> {
@@ -56,12 +64,9 @@ async function main(): Promise<void> {
   for (const [name, every] of Object.entries(SCHEDULES)) {
     await queue.upsertJobScheduler(name, { every }, { name });
   }
-  // the briefing keeps local time (duty officer files at dawn, DST included)
-  await queue.upsertJobScheduler(
-    'briefing',
-    { pattern: `0 ${env.briefingHourLocal} * * *`, tz: env.briefingTimezone },
-    { name: 'briefing' },
-  );
+  // retire the old cron-pattern scheduler if this Redis still carries it
+  // (replaced by the 'briefing-check' interval above — DECISIONS #93)
+  await queue.removeJobScheduler('briefing').catch(() => {});
 
   const worker = new Worker(
     COLLECTOR_QUEUE,
@@ -87,8 +92,8 @@ async function main(): Promise<void> {
           return jobDetect(dataRedis, pool);
         case 'analyst-poll':
           return jobAnalystPoll(dataRedis, pool);
-        case 'briefing':
-          return jobBriefing(pool);
+        case 'briefing-check':
+          return jobBriefingCheck(pool);
         case 'ops-watch':
           return jobOpsWatch(dataRedis);
         default:
