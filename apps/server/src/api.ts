@@ -174,6 +174,24 @@ export function registerApi(
       };
     });
 
+    // ── appliance display control: browser chip ↔ Redis pref ↔ display ──
+    // The Pi's display service polls GET /api/display with its summary poll
+    // (~90s) and applies the newest of {this pref, the local ctl file}.
+    scope.get('/api/display', async () => {
+      const raw = await redis.get('display:ctl');
+      return raw ? (JSON.parse(raw) as { mode: string; ts: number }) : { mode: 'auto', ts: 0 };
+    });
+
+    scope.post<{ Body: { mode?: string } }>('/api/display', async (req, reply) => {
+      const mode = req.body?.mode;
+      if (mode !== 'on' && mode !== 'off' && mode !== 'auto') {
+        return reply.code(400).send({ error: "mode must be 'on' | 'off' | 'auto'" });
+      }
+      const pref = { mode, ts: Date.now() };
+      await redis.set('display:ctl', JSON.stringify(pref));
+      return pref;
+    });
+
     // ── upstream proxies for furniture layers whose sources lack CORS ──
     // (NHC storms; FIRMS fires as fallback). Cached in-memory; stale copies
     // are served when the upstream hiccups — furniture degrades, never errors.

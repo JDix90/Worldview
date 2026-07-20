@@ -181,3 +181,11 @@ sudo systemctl enable --now orrery-backup.timer
 systemctl list-timers | grep orrery   # next run 03:30
 ```
 Restore path = §3's `pg_restore` with any `~/backups/orrery-YYYY-MM-DD.dump`.
+
+## §E-sleep. Screen sleep (added 2026-07-20)
+- Config in `edge/pager/pager.env`: `SLEEP_START=23:00`, `SLEEP_END=06:30` (local; empty = never),
+  `WAKE_ON_RED=1` (red status lights the panel through the window), `WAKE_MINUTES=10` (tap grace).
+- Manual: `orrery-screen on|off|auto|status` on the Pi (instant), or the globe UI's SCREEN chip
+  (applies within the display's ~90 s poll). Newest command wins, from either surface.
+- Mechanism: kernel backlight device (`/sys/class/backlight/*/bl_power`) — true lights-out;
+  the service keeps polling while dark so red-wake still works.

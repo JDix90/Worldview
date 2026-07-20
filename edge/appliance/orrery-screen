@@ -1,0 +1,26 @@
+#!/bin/sh
+# orrery-screen — manual control of the appliance display.
+#   orrery-screen on|off|auto   force the screen on/off, or return to schedule
+#   orrery-screen status        show control state, backlight, and UPS
+# Writes /run/orrery-display.ctl; the display service applies it within a tick
+# (~0.2s). 'auto' = the pager.env schedule (SLEEP_START/SLEEP_END + red-wake).
+set -e
+CTL=/run/orrery-display.ctl
+
+case "$1" in
+  on|off|auto)
+    printf '{"mode":"%s","ts":%s}\n' "$1" "$(date +%s.%N)" > "$CTL"
+    echo "screen mode -> $1"
+    ;;
+  status)
+    echo "control:   $(cat "$CTL" 2>/dev/null || echo '(none — auto)')"
+    for p in /sys/class/backlight/*/bl_power; do
+      [ -f "$p" ] && echo "backlight: $(cat "$p") (0=on, 4=off) [$p]"
+    done
+    echo "ups:       $(cat /run/orrery-ups.json 2>/dev/null || echo '(no ups monitor)')"
+    ;;
+  *)
+    echo "usage: orrery-screen on|off|auto|status" >&2
+    exit 2
+    ;;
+esac

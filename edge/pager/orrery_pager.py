@@ -45,6 +45,57 @@ POLL_SEC = int(os.environ.get("POLL_SEC", "90"))
 # so the appliance display self-cycles; touch still works when it feels like it.
 CAROUSEL_SEC = int(os.environ.get("CAROUSEL_SEC", "0"))
 
+# ── screen sleep ─────────────────────────────────────────────────────
+# Nightly window (local time) when the backlight goes dark; empty = never.
+# A red overall status overrides sleep (WAKE_ON_RED) — the screen lights
+# itself when something demands attention, duty-officer style. Manual
+# override via /run/orrery-display.ctl (orrery-screen CLI) or the server's
+# /api/display pref (browser chip); newest timestamp wins.
+SLEEP_START = os.environ.get("SLEEP_START", "")   # e.g. "23:00"
+SLEEP_END = os.environ.get("SLEEP_END", "")       # e.g. "06:30"
+WAKE_ON_RED = os.environ.get("WAKE_ON_RED", "1") != "0"
+WAKE_MINUTES = int(os.environ.get("WAKE_MINUTES", "10"))
+CTL_FILE = "/run/orrery-display.ctl"
+
+
+def _parse_hhmm(s: str) -> Optional[int]:
+    try:
+        hh, mm = s.strip().split(":")
+        v = int(hh) * 60 + int(mm)
+        return v if 0 <= v < 1440 else None
+    except Exception:
+        return None
+
+
+def in_sleep_window(minute_of_day: int, start_min: Optional[int], end_min: Optional[int]) -> bool:
+    """True when the schedule says dark. Handles windows crossing midnight."""
+    if start_min is None or end_min is None or start_min == end_min:
+        return False
+    if start_min < end_min:
+        return start_min <= minute_of_day < end_min
+    return minute_of_day >= start_min or minute_of_day < end_min
+
+
+def decide_awake(
+    mode: str,                 # 'on' | 'off' | 'auto'
+    minute_of_day: int,
+    start_min: Optional[int],
+    end_min: Optional[int],
+    status: str,               # 'green' | 'amber' | 'red' | 'stale'
+    wake_on_red: bool,
+    temp_wake_active: bool,
+) -> bool:
+    """The whole sleep policy in one pure, testable function."""
+    if mode == "on":
+        return True
+    if mode == "off":
+        return False
+    if not in_sleep_window(minute_of_day, start_min, end_min):
+        return True
+    if wake_on_red and status == "red":
+        return True
+    return temp_wake_active
+
 
 # ─────────────────────────── fonts / layout ───────────────────────────
 def _font(size: int) -> ImageFont.FreeTypeFont:
@@ -379,6 +430,7 @@ class Backend:
     def blit(self, img: Image.Image) -> None: ...
     def set_led(self, rgb: tuple[int, int, int]) -> None: ...
     def on_input(self, short: Callable[[], None], long: Callable[[], None]) -> None: ...
+    def set_power(self, on: bool) -> None: ...
     def battery_pct(self) -> Optional[int]:
         return None
     def cleanup(self) -> None: ...
@@ -528,6 +580,28 @@ class FramebufferBackend(Backend):
         self._touch_thread = threading.Thread(target=loop, daemon=True)
         self._touch_thread.start()
 
+    def set_power(self, on: bool) -> None:
+        """True lights-out via the panel's registered backlight device
+        (bl_power: 0 = on, 4 = FB_BLANK_POWERDOWN); fb blank as fallback."""
+        import glob
+
+        wrote = False
+        for p in sorted(glob.glob("/sys/class/backlight/*/bl_power")):
+            try:
+                with open(p, "w") as f:
+                    f.write("0" if on else "4")
+                wrote = True
+                break
+            except OSError:
+                continue
+        if not wrote:
+            try:
+                name = os.path.basename(self._f.name)
+                with open(f"/sys/class/graphics/{name}/blank", "w") as f:
+                    f.write("0" if on else "1")
+            except OSError as e:
+                print(f"[display] set_power failed: {e}", file=sys.stderr)
+
     def battery_pct(self) -> Optional[int]:
         try:
             import json
@@ -572,6 +646,9 @@ class MockBackend(Backend):
     def on_input(self, short, long) -> None:
         pass
 
+    def set_power(self, on: bool) -> None:
+        self.power_state = on  # recorded for tests
+
     def cleanup(self) -> None:
         pass
 
@@ -586,6 +663,12 @@ class App:
     page_idx: int = 0
     summary: Optional[Summary] = None
     _dirty: bool = True
+    # screen-sleep state
+    _mode: str = "auto"          # 'on' | 'off' | 'auto', newest writer wins
+    _mode_ts: float = 0.0
+    _awake: bool = True
+    _temp_wake_until: float = 0.0
+    _ctl_mtime: float = 0.0
 
     def next_page(self) -> None:
         self.page_idx = (self.page_idx + 1) % len(PAGES)
@@ -601,7 +684,70 @@ class App:
             else:
                 self.summary = Summary(raw={}, fetched_at=time.time(), ok=False)
             print(f"[display] poll failed: {e}", file=sys.stderr)
+        self._fetch_server_mode()
         self._dirty = True
+
+    def _fetch_server_mode(self) -> None:
+        """Browser chip → server pref → applied here (piggybacks the poll)."""
+        try:
+            r = requests.get(
+                f"{self.url}/api/display",
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=5,
+            )
+            r.raise_for_status()
+            d = r.json()
+            ts = float(d.get("ts", 0)) / 1000.0  # server sends ms
+            mode = d.get("mode", "auto")
+            if mode in ("on", "off", "auto") and ts > self._mode_ts:
+                self._set_mode(mode, ts, "server")
+        except Exception:
+            pass  # pref is a nicety; never disturb the display over it
+
+    def _check_ctl_file(self) -> None:
+        """orrery-screen CLI writes {'mode','ts'} — instant local control."""
+        try:
+            mtime = os.path.getmtime(CTL_FILE)
+        except OSError:
+            return
+        if mtime <= self._ctl_mtime:
+            return
+        self._ctl_mtime = mtime
+        try:
+            import json
+
+            d = json.load(open(CTL_FILE))
+            mode, ts = d.get("mode"), float(d.get("ts", 0))
+            if mode in ("on", "off", "auto") and ts > self._mode_ts:
+                self._set_mode(mode, ts, "ctl-file")
+        except Exception as e:
+            print(f"[display] bad ctl file: {e}", file=sys.stderr)
+
+    def _set_mode(self, mode: str, ts: float, source: str) -> None:
+        if mode != self._mode:
+            print(f"[display] screen mode -> {mode} (via {source})", flush=True)
+        self._mode, self._mode_ts = mode, ts
+
+    def _apply_sleep(self) -> None:
+        now = time.localtime()
+        status = "stale"
+        if self.summary and self.summary.ok:
+            status = overall_status(self.summary.raw)
+        awake = decide_awake(
+            self._mode,
+            now.tm_hour * 60 + now.tm_min,
+            _parse_hhmm(SLEEP_START),
+            _parse_hhmm(SLEEP_END),
+            status,
+            WAKE_ON_RED,
+            time.time() < self._temp_wake_until,
+        )
+        if awake != self._awake:
+            self._awake = awake
+            self.backend.set_power(awake)
+            print(f"[display] screen {'wake' if awake else 'sleep'}", flush=True)
+            if awake:
+                self._dirty = True  # repaint immediately on wake
 
     def sysinfo(self) -> dict:
         info = {
@@ -628,17 +774,34 @@ class App:
 
         def on_tap() -> None:
             self._last_input = time.time()  # manual tap resets the carousel dwell
+            if not self._awake:
+                # tap while dark = temp wake, tap consumed (no page advance)
+                self._temp_wake_until = time.time() + WAKE_MINUTES * 60
+                return
             self.next_page()
 
-        self.backend.on_input(on_tap, self.refresh)
+        def on_hold() -> None:
+            if not self._awake:
+                self._temp_wake_until = time.time() + WAKE_MINUTES * 60
+                return
+            self.refresh()
+
+        self.backend.on_input(on_tap, on_hold)
         self.refresh()
-        self.draw()
+        self._apply_sleep()
+        if self._awake:
+            self.draw()
         last_poll = time.time()
         last_clock = ""
         while True:
             if time.time() - last_poll >= POLL_SEC:
-                self.refresh()
+                self.refresh()  # keeps polling while asleep — red-wake needs it
                 last_poll = time.time()
+            self._check_ctl_file()
+            self._apply_sleep()
+            if not self._awake:
+                time.sleep(0.2)
+                continue
             if CAROUSEL_SEC > 0 and time.time() - self._last_input >= CAROUSEL_SEC:
                 self._last_input = time.time()
                 self.next_page()
@@ -649,6 +812,50 @@ class App:
             if self._dirty:
                 self.draw()
             time.sleep(0.05)
+
+
+def selftest() -> int:
+    """Exhaustive check of the sleep policy. Returns count of failures."""
+    S, E = _parse_hhmm("23:00"), _parse_hhmm("06:30")
+    m = lambda hh, mm: hh * 60 + mm
+    cases = [
+        # (desc, mode, minute, status, temp_wake, expect_awake)
+        ("daytime auto",            "auto", m(14, 0),  "green", False, True),
+        ("in window sleeps",        "auto", m(23, 30), "green", False, False),
+        ("in window after midnight","auto", m(2, 0),   "green", False, False),
+        ("window edge start",       "auto", m(23, 0),  "green", False, False),
+        ("window edge end wakes",   "auto", m(6, 30),  "green", False, True),
+        ("red overrides sleep",     "auto", m(3, 0),   "red",   False, True),
+        ("amber does not override", "auto", m(3, 0),   "amber", False, False),
+        ("stale does not override", "auto", m(3, 0),   "stale", False, False),
+        ("temp wake in window",     "auto", m(1, 0),   "green", True,  True),
+        ("manual off in daytime",   "off",  m(14, 0),  "green", False, False),
+        ("manual on in window",     "on",   m(3, 0),   "green", False, True),
+        ("manual off beats red",    "off",  m(3, 0),   "red",   False, False),
+    ]
+    fails = 0
+    for desc, mode, minute, status, temp, expect in cases:
+        got = decide_awake(mode, minute, S, E, status, True, temp)
+        ok = got == expect
+        fails += 0 if ok else 1
+        print(f"  {'PASS' if ok else 'FAIL'}  {desc}: awake={got} (want {expect})")
+    # wake_on_red disabled → red no longer overrides
+    got = decide_awake("auto", m(3, 0), S, E, "red", False, False)
+    ok = got is False
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  WAKE_ON_RED=0 disables red override: awake={got} (want False)")
+    # no-window config never sleeps (day window 09:00→17:00 boundary sanity too)
+    got = decide_awake("auto", m(3, 0), None, None, "green", True, False)
+    ok = got is True
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  no schedule never sleeps: awake={got} (want True)")
+    S2, E2 = _parse_hhmm("09:00"), _parse_hhmm("17:00")
+    got = decide_awake("auto", m(12, 0), S2, E2, "green", True, False)
+    ok = got is False
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  non-midnight-crossing window: awake={got} (want False)")
+    print(f"selftest: {'ALL PASS' if fails == 0 else f'{fails} FAILURES'}")
+    return fails
 
 
 def _wifi_label() -> str:
@@ -671,7 +878,12 @@ def main() -> None:
     ap.add_argument("--fb", metavar="/dev/fbN", help="framebuffer device (MHS-3.5 route)")
     ap.add_argument("--touch", default=None, metavar="auto|/dev/input/eventN",
                     help="XPT2046 touch device for the fb route")
+    ap.add_argument("--selftest", action="store_true",
+                    help="run the sleep-policy test cases and exit")
     args = ap.parse_args()
+
+    if args.selftest:
+        sys.exit(1 if selftest() else 0)
 
     url = os.environ.get("ORRERY_API_URL", "http://127.0.0.1:8787").rstrip("/")
     token = os.environ.get("ORRERY_AUTH_TOKEN", "")
