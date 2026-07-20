@@ -22,4 +22,8 @@ export const env = {
   databaseUrl: process.env.DATABASE_URL ?? '',
   /** Directory of a built web client to serve statically (appliance mode). */
   webDist: process.env.ORRERY_WEB_DIST ?? '',
+  /** Home anchor for the appliance display's local view (Denver metro default;
+   * override live via POST /api/settings/home from the globe's HOME chip). */
+  ownerLat: Number(process.env.OWNER_LAT ?? 39.74),
+  ownerLon: Number(process.env.OWNER_LON ?? -104.99),
 };

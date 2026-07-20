@@ -69,6 +69,21 @@ export class SnapshotFeed {
     return this.byHex.size;
   }
 
+  /** Hot-state lookup for pager signal context. */
+  aircraftByHex(hex: string): AircraftState | undefined {
+    return this.byHex.get(hex);
+  }
+
+  /** All live aircraft (overhead scan — one pass per summary request). */
+  allAircraft(): IterableIterator<AircraftState> {
+    return this.byHex.values();
+  }
+
+  /** Current military list (overhead mil flagging). */
+  milList(): AircraftState[] {
+    return this.milAircraft;
+  }
+
   /** Airborne aircraft currently in a grid cell (live observed count for the baseline API). */
   countInCell(cellId: string): number {
     let n = 0;

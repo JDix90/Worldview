@@ -220,7 +220,9 @@ def _ago(sec: int) -> str:
 
 
 # ─────────────────────────── page rendering ───────────────────────────
-PAGES = ["STATUS", "SIGNALS", "BRIEFING", "INTEGRITY", "SYSTEM"]
+# LOCAL replaced INTEGRITY (owner critique 2026-07-20: far-away GPS regions
+# aren't actionable; integrity is exceptions-only on STATUS now).
+PAGES = ["STATUS", "SIGNALS", "BRIEFING", "LOCAL", "SYSTEM"]
 
 
 def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout) -> Image.Image:
@@ -254,7 +256,7 @@ def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout) 
         "STATUS": _page_status,
         "SIGNALS": _page_signals,
         "BRIEFING": _page_briefing,
-        "INTEGRITY": _page_integrity,
+        "LOCAL": _page_local,
         "SYSTEM": _page_system,
     }[page](d, s, sysinfo, summary, L)
     _footer(d, page_idx, sysinfo, L)
@@ -294,32 +296,66 @@ def _page_status(d, s, _sys, summ, L: Layout) -> None:
 
     n_sig = len(s.get("signals", []))
     s1 = s.get("shadowS1Last24h", 0)
+    over = s.get("overhead") or {}
+    over_line = None
+    if over.get("count") is not None:
+        over_line = f"{over['count']} aircraft"
+        if over.get("milCount"):
+            over_line += f" · {over['milCount']} mil"
+
+    # GPS integrity: exceptions only — quiet things earn one line
+    exceptions = [r for r in s.get("integrity", []) if r.get("verdict") in ("elevated", "severe")]
+
     if L.landscape:
-        # right column: signals count + integrity mini-list
         x = _col_x(L)
         d.text((x, y0), f"{n_sig} open signal{'s' if n_sig != 1 else ''}", font=L.md, fill=WHITE)
         d.text((x, y0 + L.line_md), f"{s1} S1 shadow / 24h", font=L.sm, fill=AMBER if s1 else DIM)
         yy = y0 + L.line_md * 2 + L.pad
-        d.text((x, yy), "GPS INTEGRITY", font=L.sm, fill=CYAN)
+        if over_line:
+            d.text((x, yy), "OVERHEAD", font=L.sm, fill=CYAN)
+            d.text((x, yy + L.line_sm), over_line, font=L.md,
+                   fill=AMBER if over.get("milCount") else WHITE)
+            yy += L.line_sm + L.line_md + L.pad
+        d.text((x, yy), "GPS WATCH", font=L.sm, fill=CYAN)
         yy += L.line_sm + 2
-        for r in s.get("integrity", []):
-            v = r.get("verdict", "no-data")
-            pct = r.get("pct")
-            name = r.get("name", "")
-            short = name if d.textlength(name, font=L.sm) < L.w - x - 60 else name[:18] + "…"
-            d.text((x, yy), short, font=L.sm, fill=WHITE)
-            label = v.upper() if pct is None else f"{v.upper()} {pct}%"
-            d.text((x, yy + L.line_sm), label, font=L.sm, fill=VERDICT_RGB.get(v, DIM))
-            yy += L.line_sm * 2 + 4
-            if yy > L.h - L.footer_h - L.line_sm * 2:
-                break
+        if not exceptions:
+            d.text((x, yy), "all regions nominal", font=L.sm, fill=GREEN)
+            yy += L.line_sm + 4
+        else:
+            for r in exceptions[:3]:
+                v = r.get("verdict")
+                pct = r.get("pct")
+                name = r.get("name", "")
+                short = name if len(name) <= 20 else name[:19] + "…"
+                label = v.upper() if pct is None else f"{v.upper()} {pct}%"
+                d.text((x, yy), f"{short}", font=L.sm, fill=WHITE)
+                d.text((x, yy + L.line_sm), label, font=L.sm, fill=VERDICT_RGB.get(v, DIM))
+                yy += L.line_sm * 2 + 4
         d.text((L.pad, L.h - L.footer_h - L.line_sm - 4),
                f"synced {_ago(summ.stale_s)} ago", font=L.sm, fill=DIM)
     else:
         yb2 = yb + L.line_md * 2
         d.text((L.pad, yb2), f"{n_sig} open signal{'s' if n_sig != 1 else ''}", font=L.md, fill=WHITE)
+        if over_line:
+            d.text((L.pad, yb2 + L.line_md), over_line, font=L.sm, fill=WHITE)
+            yb2 += L.line_sm
         d.text((L.pad, yb2 + L.line_md), f"{s1} S1 shadow / 24h", font=L.sm, fill=AMBER if s1 else DIM)
-        d.text((L.pad, yb2 + L.line_md + L.line_sm + 4), f"synced {_ago(summ.stale_s)} ago", font=L.sm, fill=DIM)
+        gps = "GPS watch: all nominal" if not exceptions else f"GPS: {exceptions[0].get('name','')[:14]} {exceptions[0].get('verdict','').upper()}"
+        d.text((L.pad, yb2 + L.line_md + L.line_sm + 2), gps, font=L.sm,
+               fill=GREEN if not exceptions else VERDICT_RGB.get(exceptions[0].get("verdict"), DIM))
+        d.text((L.pad, yb2 + L.line_md + L.line_sm * 2 + 6), f"synced {_ago(summ.stale_s)} ago", font=L.sm, fill=DIM)
+
+
+def _sig_kind(what: str) -> str:
+    """'radio failure' from 'UAL2339 squawking 7600 (radio failure). ...'"""
+    if "(" in what and ")" in what:
+        inner = what[what.index("(") + 1 : what.index(")")]
+        if 0 < len(inner) <= 24:
+            return inner
+    if len(what) <= 24:
+        return what
+    cut = what[:25].rsplit(" ", 1)[0]  # word boundary, no mid-number chops
+    return cut if cut else what[:24]
 
 
 def _page_signals(d, s, _sys, _summ, L: Layout) -> None:
@@ -329,25 +365,48 @@ def _page_signals(d, s, _sys, _summ, L: Layout) -> None:
         return
     y = L.header_h + L.pad
     max_w = L.w - 2 * L.pad
-    n = 6 if L.landscape else 4
+    n = 3 if L.landscape else 2
     for sig in sigs[:n]:
         sev = sig.get("severity", "S?")
         col = RED if sev == "S1" else AMBER
+        ac = sig.get("aircraft") or {}
+        # line 1: severity + identity (route beats callsign beats place beats cell)
+        ident = (ac.get("callsign") or "").strip()
+        route = sig.get("route")
+        if ident and route:
+            headline = f"{ident}  {route}"
+        elif ident:
+            headline = ident
+        else:
+            headline = sig.get("place") or sig.get("region") or "—"
         d.text((L.pad, y), sev, font=L.md, fill=col)
-        d.text((L.pad + 34, y), f"{sig.get('region') or '—'}  {_ago(sig.get('ageS', 0))}",
-               font=L.sm, fill=DIM)
-        disp = sig.get("disposition")
-        if disp and L.landscape:
-            d.text((L.pad + 200, y), f"› {disp}", font=L.sm, fill=CYAN)
-        lines = _wrap(d, sig.get("what", ""), L.sm, max_w)[: (1 if L.landscape else 2)]
+        d.text((L.pad + 34, y), headline[:44], font=L.md, fill=WHITE)
+        # activity tag, right-aligned: ACTIVE (amber) while still squawking, else CLEARED
+        if ac:
+            tag = "ACTIVE" if ac.get("stillSquawking") else "CLEARED"
+            tw = d.textlength(tag, font=L.sm)
+            d.text((L.w - L.pad - tw, y + 2), tag, font=L.sm,
+                   fill=AMBER if ac.get("stillSquawking") else DIM)
+        # line 2: kind · where relative to you · age
         yy = y + L.line_md
-        for ln in lines:
-            d.text((L.pad, yy), ln, font=L.sm, fill=WHITE)
+        parts = [_sig_kind(sig.get("what", ""))]
+        dist = sig.get("distMi")
+        if dist is not None and dist < 1500:
+            parts.append(f"{dist}mi {sig.get('bearing') or ''} of you".strip())
+        elif sig.get("place"):
+            parts.append(sig.get("place"))
+        parts.append(_ago(sig.get("ageS", 0)))
+        if ac.get("altFt"):
+            parts.append(f"{ac['altFt']:,} ft")
+        d.text((L.pad, yy), " · ".join(str(p) for p in parts)[:70], font=L.sm, fill=DIM)
+        yy += L.line_sm
+        # line 3: the analyst's read (narrative beats bare disposition)
+        story = sig.get("narrative") or sig.get("disposition")
+        if story:
+            ln = _wrap(d, f"› {story}", L.sm, max_w)[0]
+            d.text((L.pad, yy), ln, font=L.sm, fill=CYAN)
             yy += L.line_sm
-        if disp and not L.landscape:
-            d.text((L.pad, yy), f"› {disp}", font=L.sm, fill=CYAN)
-            yy += L.line_sm
-        y = yy + 6
+        y = yy + 7
         if y > L.h - L.footer_h - L.line_md * 2:
             break
 
@@ -375,34 +434,40 @@ def _page_briefing(d, s, _sys, _summ, L: Layout) -> None:
         y += L.line_sm
 
 
-def _page_integrity(d, s, _sys, _summ, L: Layout) -> None:
+def _page_local(d, s, _sys, _summ, L: Layout) -> None:
+    """What's overhead — the 'look up' page, anchored to the home location."""
     y0 = L.header_h + L.pad
-    d.text((L.pad, y0), "GPS INTEGRITY", font=L.sm, fill=CYAN)
-    regions = s.get("integrity", [])
-    if L.landscape:
-        # two columns of region blocks
-        col_w = (L.w - 3 * L.pad) // 2
-        for i, r in enumerate(regions):
-            cx = L.pad + (i % 2) * (col_w + L.pad)
-            cy = y0 + L.line_sm + 8 + (i // 2) * (L.line_sm + L.line_md + 14)
-            _integrity_block(d, r, cx, cy, L)
-    else:
-        y = y0 + L.line_sm + 10
-        for r in regions:
-            _integrity_block(d, r, L.pad, y, L)
-            y += L.line_sm + L.line_md + 12
-            if y > L.h - L.footer_h - L.line_md:
-                break
-
-
-def _integrity_block(d, r: dict, x: int, y: int, L: Layout) -> None:
-    name = r.get("name", "")
-    short = name if len(name) <= 24 else name[:23] + "…"
-    d.text((x, y), short, font=L.sm, fill=WHITE)
-    v = r.get("verdict", "no-data")
-    pct = r.get("pct")
-    label = v.upper() if pct is None else f"{v.upper()} {pct}%"
-    d.text((x, y + L.line_sm), label, font=L.md, fill=VERDICT_RGB.get(v, DIM))
+    over = s.get("overhead") or {}
+    count = over.get("count")
+    if count is None:
+        d.text((L.pad, L.h // 2 - 8), "no local data (old server?)", font=L.md, fill=DIM)
+        return
+    d.text((L.pad, y0), f"OVERHEAD — {count} within 150 mi", font=L.sm, fill=CYAN)
+    if over.get("milCount"):
+        tag = f"{over['milCount']} MILITARY"
+        d.text((L.w - L.pad - d.textlength(tag, font=L.sm), y0), tag, font=L.sm, fill=AMBER)
+    tops = over.get("tops") or []
+    if not tops:
+        d.text((L.pad, L.h // 2 - 8), "quiet sky above you", font=L.md, fill=DIM)
+        return
+    y = y0 + L.line_sm + 10
+    for t in tops:
+        ident = (t.get("callsign") or "—").strip() or "—"
+        line1 = ident
+        if t.get("typeDesc"):
+            line1 += f"  {t['typeDesc'][:26]}"
+        d.text((L.pad, y), line1, font=L.md, fill=AMBER if t.get("mil") else WHITE)
+        if t.get("mil"):
+            tw = d.textlength("MIL", font=L.sm)
+            d.text((L.w - L.pad - tw, y + 2), "MIL", font=L.sm, fill=AMBER)
+        bits = []
+        if t.get("altFt"):
+            bits.append(f"{t['altFt']:,} ft")
+        bits.append(f"{t.get('distMi', '?')}mi {t.get('bearing', '')}".strip())
+        d.text((L.pad, y + L.line_md), " · ".join(bits), font=L.sm, fill=DIM)
+        y += L.line_md + L.line_sm + 8
+        if y > L.h - L.footer_h - L.line_md:
+            break
 
 
 def _page_system(d, s, sysinfo, summ, L: Layout) -> None:

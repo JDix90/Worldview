@@ -15,8 +15,12 @@ import {
 } from '@orrery/shared';
 import { env } from './env.js';
 import type { SnapshotFeed } from './snapshotFeed.js';
+import { nearestCity, distMiles, compass16 } from './data/cities.js';
+import { routeLabel } from './routes.js';
 
 const CELL_RE = /^[NS]\d{2}[EW]\d{3}$/;
+const EMERGENCY_SQUAWKS = new Set(['7500', '7600', '7700']);
+const OVERHEAD_RADIUS_MI = 150;
 
 interface BaselineRow {
   cell: string;
@@ -115,12 +119,31 @@ export function registerApi(
     // ── Pager summary: one compact Stage-4 digest for the Zero 2 W handheld ──
     // The handheld stays dumb — it renders this, never touches raw data. Keep
     // the payload small (~2KB): the pager polls it every 90s over 2.4GHz WiFi.
+    // Home anchor: Redis override (HOME chip) else env default (Denver metro).
+    async function resolveHome(): Promise<{ lat: number; lon: number }> {
+      try {
+        const raw = await redis.get('settings:home');
+        if (raw) {
+          const h = JSON.parse(raw) as { lat?: number; lon?: number };
+          if (typeof h.lat === 'number' && typeof h.lon === 'number') return { lat: h.lat, lon: h.lon };
+        }
+      } catch {
+        /* fall through to env */
+      }
+      return { lat: env.ownerLat, lon: env.ownerLon };
+    }
+
     scope.get('/api/pager/summary', async () => {
       const nowMs = Date.now();
+      const home = await resolveHome();
       const [signals, briefing, shadow24h] = await Promise.all([
         pool.query(
           `SELECT s.severity, s.ts, s.payload->>'what' AS what,
-                  s.payload->'where'->>'region' AS region, a.disposition
+                  s.payload->'where'->>'region' AS region,
+                  (s.payload->'where'->>'lat')::float8 AS lat,
+                  (s.payload->'where'->>'lon')::float8 AS lon,
+                  s.payload->'evidence'->'sample_hexes'->>0 AS hex,
+                  a.disposition, a.narrative
            FROM signal s LEFT JOIN assessment a ON a.signal_id = s.id
            WHERE s.severity IN ('S1','S2') ORDER BY s.ts DESC LIMIT 5`,
         ),
@@ -152,26 +175,99 @@ export function registerApi(
         .map((l) => l.replace(/^#+\s*/, '').trim())
         .filter(Boolean);
 
+      // Signal context: place words, distance from home, live-aircraft state,
+      // route (cached adsbdb; squawk signals only — ≤5 lookups per request,
+      // nearly always cache hits).
+      const enrichedSignals = await Promise.all(
+        signals.rows.map(async (r) => {
+          const lat = r.lat as number | null;
+          const lon = r.lon as number | null;
+          const hex = r.hex as string | null;
+          const ac = hex ? feed.aircraftByHex(hex) : undefined;
+          const isSquawk = typeof r.what === 'string' && (r.what as string).includes('squawking');
+          const route = isSquawk && ac?.callsign ? await routeLabel(redis, ac.callsign) : null;
+          return {
+            severity: r.severity as string,
+            what: r.what as string,
+            region: r.region as string | null,
+            disposition: r.disposition as string | null,
+            narrative: r.narrative ? (r.narrative as string).slice(0, 140) : null,
+            ageS: Math.max(0, Math.round((nowMs - new Date(r.ts as string).getTime()) / 1000)),
+            place: lat != null && lon != null ? nearestCity(lat, lon).label : null,
+            distMi: lat != null && lon != null ? Math.round(distMiles(home.lat, home.lon, lat, lon)) : null,
+            bearing: lat != null && lon != null ? compass16(home.lat, home.lon, lat, lon) : null,
+            aircraft: ac
+              ? {
+                  callsign: ac.callsign ?? null,
+                  altFt: ac.altBaroM != null ? Math.round(ac.altBaroM * 3.28084) : null,
+                  live: true,
+                  stillSquawking: !!ac.squawk && EMERGENCY_SQUAWKS.has(ac.squawk),
+                }
+              : hex
+                ? { callsign: null, altFt: null, live: false, stillSquawking: false }
+                : null,
+            route,
+          };
+        }),
+      );
+
+      // Overhead: one pass over hot state; military flagged via the mil list.
+      const milHexes = new Set(feed.milList().map((a) => a.hex));
+      const milByHex = new Map(feed.milList().map((a) => [a.hex, a]));
+      let overheadCount = 0;
+      const tops: Array<{
+        callsign: string | null; altFt: number | null; distMi: number;
+        bearing: string; mil: boolean; typeDesc: string | null;
+      }> = [];
+      for (const a of feed.allAircraft()) {
+        if (a.onGround) continue;
+        const d = distMiles(home.lat, home.lon, a.lat, a.lon);
+        if (d > OVERHEAD_RADIUS_MI) continue;
+        overheadCount++;
+        tops.push({
+          callsign: a.callsign ?? null,
+          altFt: a.altBaroM != null ? Math.round(a.altBaroM * 3.28084) : null,
+          distMi: Math.round(d),
+          bearing: compass16(home.lat, home.lon, a.lat, a.lon),
+          mil: milHexes.has(a.hex),
+          typeDesc: milByHex.get(a.hex)?.typeDesc ?? null,
+        });
+      }
+      tops.sort((x, y) => x.distMi - y.distMi);
+      const milCount = feed
+        .milList()
+        .filter((a) => !a.onGround && distMiles(home.lat, home.lon, a.lat, a.lon) <= OVERHEAD_RADIUS_MI).length;
+
       return {
         generatedAt: new Date(nowMs).toISOString(),
+        home,
         feed: {
           live: feed.liveCount() > 0 && nowMs / 1000 - feed.snapshotFetchedAt() < 300,
           aircraft: feed.liveCount(),
           dataAgeS: Math.max(0, Math.round(nowMs / 1000 - feed.snapshotFetchedAt())),
         },
-        signals: signals.rows.map((r) => ({
-          severity: r.severity as string,
-          what: r.what as string,
-          region: r.region as string | null,
-          disposition: r.disposition as string | null,
-          ageS: Math.max(0, Math.round((nowMs - new Date(r.ts as string).getTime()) / 1000)),
-        })),
+        signals: enrichedSignals,
         briefing: b
           ? { date: b.date_local, quiet: b.quiet, headline: briefLines[0] ?? '', open: briefLines.slice(1, 4).join(' ').slice(0, 240) }
           : null,
         integrity,
+        integrityAllNominal: integrity.every((r) => r.verdict === 'nominal' || r.verdict === 'no-data'),
+        overhead: { count: overheadCount, milCount, tops: tops.slice(0, 4) },
         shadowS1Last24h: shadow24h.rows[0].n as number,
       };
+    });
+
+    // ── home anchor: settable from the globe's HOME chip ──
+    scope.get('/api/settings/home', async () => resolveHome());
+
+    scope.post<{ Body: { lat?: number; lon?: number } }>('/api/settings/home', async (req, reply) => {
+      const { lat, lon } = req.body ?? {};
+      if (typeof lat !== 'number' || typeof lon !== 'number' || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+        return reply.code(400).send({ error: 'lat/lon required (±90/±180)' });
+      }
+      const home = { lat: Math.round(lat * 100) / 100, lon: Math.round(lon * 100) / 100 };
+      await redis.set('settings:home', JSON.stringify(home));
+      return home;
     });
 
     // ── appliance display control: browser chip ↔ Redis pref ↔ display ──

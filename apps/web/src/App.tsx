@@ -7,6 +7,7 @@ import { LayersPanel } from './ui/LayersPanel';
 import { ObjectCard } from './ui/ObjectCard';
 import { SpinToggle } from './ui/SpinToggle';
 import { ScreenToggle } from './ui/ScreenToggle';
+import { HomeChip } from './ui/HomeChip';
 import { AircraftStore } from './feed/aircraftStore';
 import { useAircraftFeed } from './feed/useAircraftFeed';
 import { buildLayerDefs } from './layers';
@@ -80,6 +81,7 @@ export function App() {
       )}
       {card && !selectedHex && <ObjectCard card={card} onClose={() => setCard(null)} />}
       <FeedPanel />
+      <HomeChip />
       <ScreenToggle />
       <SpinToggle enabled={spinEnabled} onToggle={toggleSpin} />
       <LayersPanel defs={layerDefs} enabled={layersEnabled} onToggle={toggleLayer} />

@@ -1,0 +1,70 @@
+{
+  "generatedAt": "2026-07-20T21:00:00.000Z",
+  "home": { "lat": 39.74, "lon": -104.99 },
+  "feed": { "live": true, "aircraft": 9412, "dataAgeS": 41 },
+  "signals": [
+    {
+      "severity": "S2",
+      "what": "SWA1846 squawking 7600 (radio failure), 3 observation(s), single network.",
+      "region": "N35W105",
+      "disposition": "unexplained",
+      "narrative": "Radio failure squawk from a Southwest 737 inbound to Phoenix; no distress pattern in track. Likely avionics fault.",
+      "ageS": 740,
+      "place": "near Albuquerque, US",
+      "distMi": 92,
+      "bearing": "SSW",
+      "aircraft": { "callsign": "SWA1846", "altFt": 34000, "live": true, "stillSquawking": true },
+      "route": "Denver → Phoenix"
+    },
+    {
+      "severity": "S2",
+      "what": "2 aircraft squawking 7700 within 500 km of each other inside 30 min — not a routine diversion pattern.",
+      "region": "N40W085",
+      "disposition": "noise",
+      "narrative": "Two unrelated medical diversions; both aircraft landed normally per track data.",
+      "ageS": 5400,
+      "place": "near Indianapolis, US",
+      "distMi": 1010,
+      "bearing": "E",
+      "aircraft": { "callsign": null, "altFt": null, "live": false, "stillSquawking": false },
+      "route": null
+    },
+    {
+      "severity": "S2",
+      "what": "EJA520 squawking 7500 (unlawful interference), 2 observation(s), single network — below the corroborated-S1 bar, watching.",
+      "region": "N30E050",
+      "disposition": "unexplained",
+      "narrative": "Fractional bizjet over the Gulf; 7500 held two polls then cleared. Consistent with transponder mis-set.",
+      "ageS": 9100,
+      "place": "near Dubai, AE",
+      "distMi": 7800,
+      "bearing": "NNE",
+      "aircraft": { "callsign": "EJA520", "altFt": 41000, "live": true, "stillSquawking": false },
+      "route": null
+    }
+  ],
+  "briefing": {
+    "date": "2026-07-20T00:00:00.000Z",
+    "quiet": false,
+    "headline": "ORRERY — Night Watch Briefing, 20 Jul 2026",
+    "open": "Coverage nominal. One radio-failure squawk near home region worth a glance; Baltic corridor remains noisy but consistent with its baseline."
+  },
+  "integrity": [
+    { "name": "Baltic / Kaliningrad corridor", "verdict": "severe", "pct": 51 },
+    { "name": "Black Sea", "verdict": "nominal", "pct": 9 },
+    { "name": "Eastern Mediterranean", "verdict": "nominal", "pct": 4 },
+    { "name": "Persian Gulf", "verdict": "nominal", "pct": 11 }
+  ],
+  "integrityAllNominal": false,
+  "overhead": {
+    "count": 14,
+    "milCount": 1,
+    "tops": [
+      { "callsign": "UAL421", "altFt": 12400, "distMi": 8, "bearing": "NE", "mil": false, "typeDesc": null },
+      { "callsign": "SKW5312", "altFt": 21000, "distMi": 23, "bearing": "S", "mil": false, "typeDesc": null },
+      { "callsign": "EVAC91", "altFt": 26000, "distMi": 41, "bearing": "WNW", "mil": true, "typeDesc": "Boeing KC-135R Stratotanker" },
+      { "callsign": "FFT210", "altFt": 36000, "distMi": 66, "bearing": "ESE", "mil": false, "typeDesc": null }
+    ]
+  },
+  "shadowS1Last24h": 0
+}
