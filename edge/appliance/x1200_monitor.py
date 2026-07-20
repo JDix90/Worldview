@@ -135,6 +135,9 @@ def ntfy(title: str, body: str, priority: str = "default", dry: bool = False) ->
             headers={"Title": title, "Priority": priority, "Tags": "electric_plug"},
         )
         urllib.request.urlopen(req, timeout=10)
+        # log successes too — the journal doubles as the power-event audit trail
+        # (learned in the first live drill: silent success reads as "never fired")
+        log(f"NTFY sent [{priority}] {title}")
     except Exception as e:
         log(f"ntfy failed: {e}")
 

@@ -226,6 +226,10 @@ Running log. Every non-obvious choice gets a line: what was decided, why, what w
 
 91. **WORLD EVENTS layer** ([worldEvents.ts](apps/web/src/layers/worldEvents.ts)): GDACS `geteventlist/MAP`, client-direct (CORS `*`, keyless — verified live). Scoped per #89: floods/volcanoes/droughts always, tropical cyclones **only outside NHC basins** (GDACS is global — this patches cyclones.ts's documented WPac/JTWC gap), earthquakes/wildfires skipped (USGS/FIRMS own them), `iscurrent` only. Alert-colored diamonds (Green teal · Orange amber · Red pulses), earthquakes.ts picker/card pattern. Verified live: 53 events rendered; East Africa drought card reads correctly (Orange, score 2.0, 88d). 2.77 ms/frame with all 18 layers. Deployed to the appliance same session.
 
+## 2026-07-20 — H4 pull-the-plug drill: PASSED
+
+92. **The appliance survives power loss exactly as designed.** Live drill at 93.9% SOC: AC loss detected within one 10 s poll (status file 20:14:28 `ac:true` → 20:14:38 `ac:false`); "on battery" ntfy delivered the **same second** (verified by polling the topic's message log — the journal was silent because `ntfy()` only logged failures; fixed: successes now log too, so the journal is a power-event audit trail). 4.5 minutes on battery: **the 20:15 rollup landed while on battery**, stack/display never blinked, `throttled=0x0` throughout, VCELL sagged only 4.14→4.08 V under load, SOC fell 1% → ~6–7 h estimated runtime at current draw (matches EDGE.md's estimate). Restore detected in ≤1 poll, all-clear delivered, charge resumed at 4.22 V. The optional low-SOC graceful-halt simulation remains available (RUNBOOK §C.6) but the decision path is mock-covered and the halt is two subprocess calls; not worth taking the appliance down on a healthy day. **H4 closed — the appliance hardware story is complete.**
+
 ### Assumptions pending owner confirmation
 
 - OpenSky registered account + API client will be created by the owner; credentials into `.env`. **Blocks the collector chunk.**

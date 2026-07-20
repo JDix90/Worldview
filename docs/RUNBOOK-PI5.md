@@ -149,11 +149,15 @@ Mac where the GPU lives.)
    ```
 5. The monitor writes `/run/orrery-ups.json`; the display's SYSTEM page picks
    up battery % and AC/ON-BATTERY automatically.
-6. **The drill** (do it once, on purpose): pull the USB-C → ntfy "on battery"
-   within ~20s, buckets keep accumulating → replug → all-clear. Then lower
-   `SOC_SHUTDOWN_PCT` temporarily to force the graceful-stop path and confirm
-   Postgres comes back clean (`docker compose up -d`, rollup continuity).
-   Log the drill result in DECISIONS.
+6. **The drill** — ✅ **RUN 2026-07-20, PASSED** (details DECISIONS #92):
+   AC-loss detected in ≤1 poll (10 s), "on battery" push delivered to ntfy the
+   same second (verified by polling the topic); 4.5 min on battery with the
+   stack, display, and rollups untouched — the 20:15 bucket landed *while on
+   battery*; VCELL sag 4.14→4.08 V, SOC −1% → **~6–7 h estimated runtime**;
+   restore detected in ≤1 poll, all-clear delivered, charging resumed.
+   Remaining optional: the real low-SOC graceful halt (temporarily set
+   `SOC_SHUTDOWN_PCT=99` while on battery; the X1200 keeps 5 V after halt, so
+   fully cut power to reboot afterward). The logic is covered by mock mode.
 
 ## §E. Serving the globe from the appliance
 The Pi hosts the built web client at **http://10.0.0.177:8787** (server registers
