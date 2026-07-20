@@ -187,5 +187,7 @@ Restore path = §3's `pg_restore` with any `~/backups/orrery-YYYY-MM-DD.dump`.
   `WAKE_ON_RED=1` (red status lights the panel through the window), `WAKE_MINUTES=10` (tap grace).
 - Manual: `orrery-screen on|off|auto|status` on the Pi (instant), or the globe UI's SCREEN chip
   (applies within the display's ~90 s poll). Newest command wins, from either surface.
-- Mechanism: kernel backlight device (`/sys/class/backlight/*/bl_power`) — true lights-out;
-  the service keeps polling while dark so red-wake still works.
+- Mechanism: a blitted black frame (the MHS-3.5 clone hardwires its backlight — the kernel
+  backlight node is a stub, so a faint glow remains in a dark room; DECISIONS #94). The
+  service keeps polling while dark so red-wake still works. On real-backlight hardware
+  (Whisplay), set_power additionally cuts the LED.

@@ -464,6 +464,9 @@ class WhisplayBackend(Backend):
         self.board.on_button_press(lambda: setattr(self, "_down_at", time.time()))
         self.board.on_button_release(self._release)
 
+    def set_power(self, on: bool) -> None:
+        self.board.set_backlight(100 if on else 0)  # Whisplay's backlight is real
+
     def _release(self) -> None:
         held = time.time() - self._down_at
         (self._long if held >= self.LONG_PRESS_S else self._short)()
@@ -744,6 +747,14 @@ class App:
         )
         if awake != self._awake:
             self._awake = awake
+            if not awake:
+                # Blit solid black BEFORE cutting power: the ILI9486 self-
+                # refreshes its last frame from GRAM, and on MHS-3.5 clones
+                # the backlight is hardwired on (bl_power is a stub with
+                # max_brightness=0 — verified by eyeball 2026-07-20), so the
+                # black frame IS the sleep visual there. On hardware with a
+                # real backlight (Whisplay), set_power does the rest.
+                self.backend.blit(Image.new("RGB", (self.layout.w, self.layout.h), (0, 0, 0)))
             self.backend.set_power(awake)
             print(f"[display] screen {'wake' if awake else 'sleep'}", flush=True)
             if awake:
