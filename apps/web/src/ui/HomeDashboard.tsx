@@ -9,6 +9,8 @@ import { useEffect, useRef, useState } from 'react';
 import { apiGet } from '../feed/api';
 import { fetchRoute } from '../feed/routes';
 import { fetchSpaceWeather, auroraVerdict, type SpaceWeather } from '../sky/spaceWeather';
+import { nextIssPasses, type Pass } from '../sky/passes';
+import { sublunarPoint } from '../globe/lunar';
 
 const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 
@@ -148,6 +150,8 @@ export function HomeDashboard() {
   const [wx, setWx] = useState<Weather | null>(null);
   const [routes, setRoutes] = useState<Record<string, string>>({});
   const [cond, setCond] = useState<Conditions>({ aqi: null, alerts: [], fires: null });
+  // home-coords key — effects below refetch when it changes
+  const homeKey = sum?.home ? `${sum.home.lat},${sum.home.lon}` : '';
   const [sw, setSw] = useState<SpaceWeather | null>(null);
   const swTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
@@ -158,6 +162,18 @@ export function HomeDashboard() {
     swTimer.current = setInterval(load, 15 * 60_000);
     return () => clearInterval(swTimer.current);
   }, [open]);
+
+  const [passes, setPasses] = useState<Pass[] | null>(null);
+  useEffect(() => {
+    if (!open || !sum?.home) return;
+    let alive = true;
+    nextIssPasses(sum.home.lat, sum.home.lon, 24)
+      .then((p) => alive && setPasses(p))
+      .catch(() => alive && setPasses([]));
+    return () => {
+      alive = false;
+    };
+  }, [open, homeKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const sumTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const wxTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
@@ -179,8 +195,6 @@ export function HomeDashboard() {
     };
   }, [open]);
 
-  // weather depends on home coords — refetch when they arrive/change
-  const homeKey = sum?.home ? `${sum.home.lat},${sum.home.lon}` : '';
   useEffect(() => {
     if (!open || !sum?.home) return;
     const { lat, lon } = sum.home;
@@ -437,6 +451,36 @@ export function HomeDashboard() {
             <span style={{ opacity: 0.7 }}> · nearest {cond.fires.nearestMi}mi {cond.fires.nearestDir}</span>
           </div>
         )}
+      </Section>
+
+      <Section title="SKY TONIGHT">
+        {passes === null ? (
+          <div style={{ opacity: 0.5 }}>computing ISS passes…</div>
+        ) : passes.length === 0 ? (
+          <div style={{ opacity: 0.6 }}>no visible ISS pass in the next 24 h</div>
+        ) : (
+          (() => {
+            const p = passes[0]!;
+            const dt = new Date(p.riseMs);
+            const today = new Date().getDate() === dt.getDate();
+            const hm = `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
+            return (
+              <div title="International Space Station — visible to the naked eye when sunlit against a dark sky">
+                ISS {today ? 'tonight' : 'tomorrow'} {hm} · rises {p.riseDir} · max {p.maxElDeg}° ·{' '}
+                {Math.round(p.durationS / 60)} min
+                {p.bright && <span style={{ color: GREEN }}> · bright</span>}
+              </div>
+            );
+          })()
+        )}
+        {(() => {
+          const m = sublunarPoint(new Date());
+          return (
+            <div style={{ opacity: 0.85 }}>
+              moon: {m.phaseName.toLowerCase()} · {Math.round(m.illumination * 100)}% lit
+            </div>
+          );
+        })()}
       </Section>
 
       {sw && (

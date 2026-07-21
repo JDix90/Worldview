@@ -133,6 +133,14 @@ Hardware on hand: Pi 5 + cooler + X1200 UPS (2×18650) + MHS-3.5" (480×320). Ze
 
 Perf: 2.77 ms/frame, 18 layers. Both deployed to the appliance.
 
+## Phase 1.5j — Sky sense + heartbeat + space weather (2026-07-21, DECISIONS #102–104)
+
+| Piece | What shipped | Verified |
+|---|---|---|
+| Instrument heartbeat | /api/stats endpoints; FEED sparkline (24 h world traffic) + learning readout; card/feed ⤓ fly-to; Pi SYSTEM sparkline | psql cross-check; spy-verified fly; fb readback |
+| Space weather | sky/spaceWeather.ts (SWPC Kp/X-ray/wind) + dashboard section + aurora-at-latitude verdict; Pi aurora line | live: Kp 3.0, real C2.5 flare; physics sanity Denver/Fairbanks |
+| Sky Tonight | ISS pass predictors ×2 (satellite.js + python-sgp4) + moon phase; dashboard section; Pi evening block | cross-stack agreement to the minute; moon anchors; live panel during a real pass |
+
 ## Phases 2+ — sketches only (one paragraph each, contingent on the gate)
 
 **Phase 2 — Second layer.** Add one more collector through the existing seams — candidate chosen *at the time* by what Phase 1 taught us (likely candidates: earthquakes/USGS for its clean feed, or weather overlay for globe beauty; but the gate review decides). The test of the architecture: a new source should be an adapter, a baseline config, and detectors — no changes to stages' contracts. Real NOTAM integration for the analyst belongs here if the traffic-collapse detector proved useful.

@@ -337,6 +337,16 @@ def fetch_local_conditions(lat: float, lon: float) -> dict:
             out["aurora"] = aurora_verdict(out["kp_max"], lat, lon)
     except Exception as e:
         print(f"[display] kp fetch failed: {e}", file=sys.stderr)
+    try:
+        import sky
+
+        now_ms = time.time() * 1000
+        out["moon"] = sky.moon_phase(now_ms)
+        passes = sky.next_iss_passes(lat, lon, 24, now_ms)
+        if passes:
+            out["iss"] = passes[0]
+    except Exception as e:
+        print(f"[display] sky compute failed: {e}", file=sys.stderr)
     return out
 
 
@@ -456,6 +466,33 @@ def _page_today(d, c: dict, L: Layout) -> None:
         d.text((L.pad + d.textlength(aqi_text, font=L.md) + 10, y + 2),
                f"PM2.5 {c.get('pm25', '—')}", font=L.sm, fill=DIM)
         y += L.line_md + 8
+    # evening sky block: ISS pass + moon, shown from ~1h before sunset onward
+    def _min_of(hhmm):
+        try:
+            hh, mm = hhmm.split(":")
+            return int(hh) * 60 + int(mm)
+        except Exception:
+            return None
+    now = time.localtime()
+    now_min = now.tm_hour * 60 + now.tm_min
+    ss = _min_of(c.get("sunset", "")) if c.get("sunset") else None
+    evening = ss is not None and now_min >= ss - 60
+    if evening:
+        iss = c.get("iss")
+        if iss:
+            rise = time.localtime(iss["rise_ms"] / 1000)
+            tonight = rise.tm_yday == now.tm_yday
+            when = f"{rise.tm_hour:02d}:{rise.tm_min:02d}"
+            label = f"✦ ISS {'tonight' if tonight else 'tomorrow'} {when} · rises {iss['rise_dir']} · max {iss['max_el']}°"
+            if iss.get("bright"):
+                label += " · bright"
+            d.text((L.pad, y), label, font=L.md, fill=CYAN if iss.get("bright") else WHITE)
+            y += L.line_md + 2
+        moon = c.get("moon")
+        if moon:
+            d.text((L.pad, y), f"☾ {moon['name']} · {round(moon['illumination'] * 100)}% lit",
+                   font=L.sm, fill=DIM)
+            y += L.line_sm + 4
     # aurora line — rare enough to always show when non-none
     if c.get("aurora") in ("horizon", "overhead"):
         word = "likely overhead" if c["aurora"] == "overhead" else "possible on the northern horizon"
@@ -1147,6 +1184,27 @@ def selftest() -> int:
         ok = got == expect
         fails += 0 if ok else 1
         print(f"  {'PASS' if ok else 'FAIL'}  {desc}: {got} (want {expect})")
+    # sky module: moon-phase anchors (lunar verify dates) + structural pass check
+    try:
+        import sky
+        m_new = sky.moon_phase(947116800000)   # 2000-01-06 ~18:14 UTC — new moon
+        m_full = sky.moon_phase(948422400000)  # 2000-01-21 ~04:40 UTC — full moon
+        for desc, got, want in [
+            ("moon new 2000-01-06", m_new["illumination"] < 0.05, True),
+            ("moon full 2000-01-21", m_full["illumination"] > 0.95, True),
+        ]:
+            ok = got == want
+            fails += 0 if ok else 1
+            print(f"  {'PASS' if ok else 'FAIL'}  {desc}")
+        # structural: sun elevation at subsolar point ≈ 90
+        dec, slng = sky.subsolar_point(time.time() * 1000)
+        el = sky.sun_elevation(dec, slng, time.time() * 1000)
+        ok = el > 89
+        fails += 0 if ok else 1
+        print(f"  {'PASS' if ok else 'FAIL'}  sun overhead at subsolar point: {el:.1f}°")
+    except Exception as e:
+        fails += 1
+        print(f"  FAIL  sky module: {e}")
     print(f"selftest: {'ALL PASS' if fails == 0 else f'{fails} FAILURES'}")
     return fails
 
