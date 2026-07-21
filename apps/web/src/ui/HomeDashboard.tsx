@@ -107,6 +107,7 @@ interface Summary {
   integrity?: Array<{ name: string; verdict: string; pct: number | null }>;
   overhead?: { count: number; milCount: number; tops: Array<{ callsign: string | null; altFt: number | null; distMi: number; bearing: string; mil: boolean; typeDesc: string | null }> };
   shadowS1Last24h?: number;
+  airport?: { code: string; type: string; reason: string; detail: string } | null;
 }
 
 interface Weather {
@@ -416,6 +417,18 @@ export function HomeDashboard() {
       </Section>
 
       <Section title="LOCAL CONDITIONS">
+        {sum?.airport && (
+          <div
+            style={{
+              color: sum.airport.type === 'ground-stop' || sum.airport.type === 'closure' ? RED : AMBER,
+            }}
+            title="FAA national airspace status for your home airport"
+          >
+            ✈ {sum.airport.code}: {sum.airport.type.replace('-', ' ')}
+            {sum.airport.detail ? ` · ${sum.airport.detail}` : ''}
+            {sum.airport.reason ? ` — ${sum.airport.reason.toLowerCase()}` : ''}
+          </div>
+        )}
         {/* air quality */}
         {cond.aqi ? (
           (() => {

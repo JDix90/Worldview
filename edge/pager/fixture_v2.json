@@ -133,5 +133,11 @@
       }
     ]
   },
-  "shadowS1Last24h": 0
+  "shadowS1Last24h": 0,
+  "airport": {
+    "code": "DEN",
+    "type": "ground-stop",
+    "reason": "thunderstorms",
+    "detail": "until 10:30 pm MDT"
+  }
 }

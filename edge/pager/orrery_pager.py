@@ -421,7 +421,7 @@ def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
 
     s = summary.raw
     if page == "TODAY":
-        _page_today(d, conditions or {}, L)
+        _page_today(d, s, conditions or {}, L)
     else:
         {
             "SIGNALS": _page_signals,
@@ -433,7 +433,7 @@ def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
     return img
 
 
-def _page_today(d, c: dict, L: Layout) -> None:
+def _page_today(d, s: dict, c: dict, L: Layout) -> None:
     """The living-room glance: big weather, alerts, AQI. All fields optional."""
     y0 = L.header_h + L.pad
     temp = c.get("temp")
@@ -498,6 +498,15 @@ def _page_today(d, c: dict, L: Layout) -> None:
         word = "likely overhead" if c["aurora"] == "overhead" else "possible on the northern horizon"
         d.text((L.pad, y), f"✦ aurora {word} — look north late", font=L.md,
                fill=GREEN if c["aurora"] == "overhead" else AMBER)
+        y += L.line_md + 2
+    # home-airport delay line — exception-based like alerts (FAA via summary)
+    ap = s.get("airport")
+    if ap:
+        is_red = ap.get("type") in ("ground-stop", "closure")
+        line = f"✈ {ap.get('code', '?')}: {str(ap.get('type', '')).replace('-', ' ')}"
+        if ap.get("detail"):
+            line += f" · {ap['detail']}"
+        d.text((L.pad, y), line, font=L.md, fill=RED if is_red else AMBER)
         y += L.line_md + 2
     # alerts block — omitted entirely when quiet
     for a in c.get("alerts", []):

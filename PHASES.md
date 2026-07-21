@@ -141,6 +141,13 @@ Perf: 2.77 ms/frame, 18 layers. Both deployed to the appliance.
 | Space weather | sky/spaceWeather.ts (SWPC Kp/X-ray/wind) + dashboard section + aurora-at-latitude verdict; Pi aurora line | live: Kp 3.0, real C2.5 flare; physics sanity Denver/Fairbanks |
 | Sky Tonight | ISS pass predictors ×2 (satellite.js + python-sgp4) + moon phase; dashboard section; Pi evening block | cross-stack agreement to the minute; moon anchors; live panel during a real pass |
 
+## Phase 1.5j — Rain & airport delays (2026-07-21, DECISIONS #106–108)
+
+| Addition | Source | Status |
+|---|---|---|
+| RAIN & STORMS drape | GIBS IMERG 30-min (radar colors, thumbnail-probed availability) | ✅ verified — monsoon + ITCZ live |
+| AIRPORT DELAYS | FAA nasstatus via proxy; exception-based marks + DEN line on TODAY/dashboard | ✅ verified — PHX ground stop parsed live |
+
 ## Phases 2+ — sketches only (one paragraph each, contingent on the gate)
 
 **Phase 2 — Second layer.** Add one more collector through the existing seams — candidate chosen *at the time* by what Phase 1 taught us (likely candidates: earthquakes/USGS for its clean feed, or weather overlay for globe beauty; but the gate review decides). The test of the architecture: a new source should be an adapter, a baseline config, and detectors — no changes to stages' contracts. Real NOTAM integration for the analyst belongs here if the traffic-collapse detector proved useful.

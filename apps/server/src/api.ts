@@ -287,8 +287,25 @@ export function registerApi(
         integrityAllNominal: integrity.every((r) => r.verdict === 'nominal' || r.verdict === 'no-data'),
         overhead: { count: overheadCount, milCount, tops: tops.slice(0, 4) },
         shadowS1Last24h: shadow24h.rows[0].n as number,
+        airport: await ownerAirportStatus(),
       };
     });
+
+    // Home-airport delay status for the TODAY page / dashboard (null = clear).
+    // Worst active program wins: closure > ground stop > ground delay > delay.
+    const FAA_RANK: Record<string, number> = { closure: 3, 'ground-stop': 2, 'ground-delay': 1, delay: 0 };
+    async function ownerAirportStatus() {
+      try {
+        const faa = await faaStatus();
+        const hits = faa.programs
+          .filter((p) => p.arpt === env.ownerAirport)
+          .sort((a, b) => (FAA_RANK[b.type] ?? 0) - (FAA_RANK[a.type] ?? 0));
+        const worst = hits[0];
+        return worst ? { code: env.ownerAirport, ...worst } : null;
+      } catch {
+        return null; // furniture: a quiet line beats an error
+      }
+    }
 
     // ── home anchor: settable from the globe's HOME chip ──
     scope.get('/api/settings/home', async () => {
@@ -343,6 +360,53 @@ export function registerApi(
         throw err;
       }
     };
+
+    // ── FAA national airspace status → parsed JSON (nasstatus XML is flat;
+    // regex extraction per program type — verified shapes 2026-07-21) ──
+    const parseFaa = (xml: string) => {
+      const programs: Array<{ arpt: string; type: string; reason: string; detail: string }> = [];
+      const grab = (block: RegExp, type: string, detailFn: (m: string) => string) => {
+        for (const m of xml.matchAll(block)) {
+          const seg = m[0];
+          const arpt = /<ARPT>([A-Z0-9]{3,4})<\/ARPT>/.exec(seg)?.[1];
+          if (!arpt) continue;
+          const reason = (/<Reason>([^<]*)<\/Reason>/.exec(seg)?.[1] ?? '').trim();
+          programs.push({ arpt, type, reason: reason.slice(0, 120), detail: detailFn(seg) });
+        }
+      };
+      grab(/<Ground_Stop_List>.*?<\/Ground_Stop_List>/gs, 'ground-stop', (s) => {
+        const end = /<End_Time>([^<]*)<\/End_Time>/.exec(s)?.[1];
+        return end ? `until ${end}` : '';
+      });
+      grab(/<Ground_Delay>.*?<\/Ground_Delay>/gs, 'ground-delay', (s) => {
+        const avg = /<Avg>([^<]*)<\/Avg>/.exec(s)?.[1];
+        return avg ? `avg ${avg}` : '';
+      });
+      grab(/<Delay>.*?<\/Delay>/gs, 'delay', (s) => {
+        const min = /<Min>([^<]*)<\/Min>/.exec(s)?.[1];
+        const max = /<Max>([^<]*)<\/Max>/.exec(s)?.[1];
+        const trend = /<Trend>([^<]*)<\/Trend>/.exec(s)?.[1];
+        return [min && max ? `${min}–${max}` : min ?? '', trend ? `(${trend.toLowerCase()})` : ''].filter(Boolean).join(' ');
+      });
+      grab(/<Airport>.*?<\/Airport>/gs, 'closure', (s) => {
+        const reopen = /<Reopen>([^<]*)<\/Reopen>/.exec(s)?.[1];
+        return reopen ? `reopens ${reopen.replace(/\.$/, '')}` : '';
+      });
+      const updated = /<Update_Time>([^<]*)<\/Update_Time>/.exec(xml)?.[1] ?? '';
+      return { updated, programs };
+    };
+
+    const faaStatus = async () => {
+      const entry = await proxied(
+        'faa',
+        'https://nasstatus.faa.gov/api/airport-status-information',
+        3 * 60_000, // FAA updates ~1/min; 3-min cache is plenty for furniture
+        'text/xml',
+      );
+      return parseFaa(entry.body as string);
+    };
+
+    scope.get('/api/proxy/faa-status', async () => faaStatus());
 
     scope.get('/api/proxy/storms', async (_req, reply) => {
       const entry = await proxied('storms', 'https://www.nhc.noaa.gov/CurrentStorms.json', 15 * 60_000, 'application/json');

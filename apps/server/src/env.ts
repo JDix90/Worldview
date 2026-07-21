@@ -24,6 +24,8 @@ export const env = {
   webDist: process.env.ORRERY_WEB_DIST ?? '',
   /** Home anchor for the appliance display's local view (Denver metro default;
    * override live via POST /api/settings/home from the globe's HOME chip). */
+  /** Home airport for the TODAY/dashboard delay line (FAA status). */
+  ownerAirport: (process.env.OWNER_AIRPORT ?? 'DEN').toUpperCase(),
   ownerLat: Number(process.env.OWNER_LAT ?? 39.74),
   ownerLon: Number(process.env.OWNER_LON ?? -104.99),
 };
