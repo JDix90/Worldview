@@ -258,7 +258,10 @@ export function registerApi(
     });
 
     // ── home anchor: settable from the globe's HOME chip ──
-    scope.get('/api/settings/home', async () => resolveHome());
+    scope.get('/api/settings/home', async () => {
+      const home = await resolveHome();
+      return { ...home, label: nearestCity(home.lat, home.lon).label };
+    });
 
     scope.post<{ Body: { lat?: number; lon?: number } }>('/api/settings/home', async (req, reply) => {
       const { lat, lon } = req.body ?? {};
