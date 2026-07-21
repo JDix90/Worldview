@@ -316,13 +316,19 @@ export function registerApi(
       return reply.type(entry.contentType).send(entry.body);
     });
 
-    scope.get('/api/proxy/fires', async (_req, reply) => {
+    // ?bbox=west,south,east,north scopes to an area (the HOME dashboard uses
+    // this — FIRMS omits CORS headers on error responses, so a browser can't
+    // fetch it directly and reliably; the same-origin proxy + stale-serve
+    // insulates from FIRMS's aggressive rate limiting). Default = world.
+    const BBOX_RE = /^-?\d+(\.\d+)?(,-?\d+(\.\d+)?){3}$/;
+    scope.get<{ Querystring: { bbox?: string } }>('/api/proxy/fires', async (req, reply) => {
       const key = process.env.FIRMS_MAP_KEY ?? '';
       if (!key) return reply.code(503).send({ error: 'FIRMS_MAP_KEY not configured' });
+      const bbox = req.query.bbox && BBOX_RE.test(req.query.bbox) ? req.query.bbox : 'world';
       const entry = await proxied(
-        'fires',
+        `fires:${bbox}`,
         // NOAA-20: Suomi-NPP NRT is deprecated (0 rows, verified 2026-07-16)
-        `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${key}/VIIRS_NOAA20_NRT/world/1`,
+        `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${key}/VIIRS_NOAA20_NRT/${bbox}/1`,
         30 * 60_000,
         'text/csv',
       );

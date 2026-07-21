@@ -256,6 +256,10 @@ Running log. Every non-obvious choice gets a line: what was decided, why, what w
 
 99. **OPS: FIRMS MAP_KEY is rejected upstream (2026-07-21).** `Invalid MAP_KEY` from both Mac and Pi against the FIRMS area API, world *and* bbox forms — yet the globe fires layer still renders because the server proxy stale-serves its last good CSV (by design for furniture, but it was masking this auth failure). The dashboard's explicit "fire data unavailable" line now surfaces it honestly. **Owner action:** regenerate the free key at firms.modaps.eosdis.nasa.gov/api/ and replace `FIRMS_MAP_KEY` in `.env` (fires layer, `/api/proxy/fires`, and the dashboard all pick it up); keys occasionally rotate/expire. Not urgent — fire data degrades gracefully everywhere.
 
+## 2026-07-21 — FIRMS fires: diagnosis + proxy-bbox fix (supersedes #99)
+
+100. **#99's "regenerate the key" was wrong — the key is fine; the issues were CORS-on-error + an IP-level rate block.** Two distinct root causes, both found by verifying rather than assuming: (a) FIRMS returns `access-control-allow-origin: *` ONLY on successful 200s — its error responses (400 "Invalid MAP_KEY") carry no CORS header, so a browser `fetch` *throws* ("Failed to fetch") on any FIRMS error, making the dashboard's client-direct fetch fundamentally unreliable. (b) The "Invalid MAP_KEY" itself is an **IP-level edge block** for rapid requests, NOT a bad or over-quota key: the key-status endpoint reports `current_transactions: 0/5000` while requests still 400 — my own burst testing (a dozen+ probes in minutes) kept the block warm. Fix: the HOME dashboard now fetches fires through the **same-origin server proxy** (`/api/proxy/fires?bbox=west,south,east,north`, new bbox param, cached 30 min, stale-serve) — no CORS exposure, and one good server fetch insulates the browser from FIRMS's throttling entirely. Correct and deployed; end-to-end fires verification pends FIRMS clearing our IP (quiet period). AQI + NWS alerts unaffected and live.
+
 ### Assumptions pending owner confirmation
 
 - OpenSky registered account + API client will be created by the owner; credentials into `.env`. **Blocks the collector chunk.**

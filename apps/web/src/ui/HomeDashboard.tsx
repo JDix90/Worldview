@@ -237,10 +237,15 @@ export function HomeDashboard() {
           });
         }
       } catch { /* absent */ }
-      // FIRMS fire detections within ~150 mi (best-effort; key may be rejected upstream)
+      // FIRMS fire detections within ~150 mi, via the same-origin proxy:
+      // FIRMS omits CORS headers on error responses, so a direct browser
+      // fetch throws on any rate-limit/error; the proxy (cached, stale-serve)
+      // is reliable. (DECISIONS #100)
       try {
         const bbox = `${(lon - 2.8).toFixed(2)},${(lat - 2.2).toFixed(2)},${(lon + 2.8).toFixed(2)},${(lat + 2.2).toFixed(2)}`;
-        const res = await fetch(`https://firms.modaps.eosdis.nasa.gov/api/area/csv/${__FIRMS_KEY__}/VIIRS_NOAA20_NRT/${bbox}/1`);
+        const res = await fetch(`/api/proxy/fires?bbox=${bbox}`, {
+          headers: { Authorization: `Bearer ${__ORRERY_TOKEN__}` },
+        });
         const text = await res.text();
         if (!res.ok || !text.toLowerCase().includes('latitude')) {
           next.fires = 'unavailable';
