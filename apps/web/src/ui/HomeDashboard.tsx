@@ -103,7 +103,7 @@ interface Summary {
     bearing: string | null; route: string | null;
     aircraft: { callsign: string | null; altFt: number | null; live: boolean; stillSquawking: boolean } | null;
   }>;
-  briefing?: { date: string; quiet: boolean; headline: string; open: string } | null;
+  briefing?: { date: string; quiet: boolean; lead: string; changed: string | null; signoff: string | null } | null;
   integrity?: Array<{ name: string; verdict: string; pct: number | null }>;
   overhead?: { count: number; milCount: number; tops: Array<{ callsign: string | null; altFt: number | null; distMi: number; bearing: string; mil: boolean; typeDesc: string | null }> };
   shadowS1Last24h?: number;
@@ -531,23 +531,35 @@ export function HomeDashboard() {
         <Section
           title="BRIEFING"
           right={
-            <span style={{ color: sum.briefing.quiet ? DIM : AMBER, fontSize: 10 }}>
-              {sum.briefing.quiet ? 'QUIET' : 'ACTIVE'}
+            <span style={{ fontSize: 10 }}>
+              <span style={{ opacity: 0.4 }}>{String(sum.briefing.date).slice(0, 10)} · </span>
+              <span style={{ color: sum.briefing.quiet ? DIM : AMBER }}>
+                {sum.briefing.quiet ? 'QUIET' : 'ACTIVE'}
+              </span>
             </span>
           }
         >
-          <div style={{ opacity: 0.9 }}>{sum.briefing.headline.replace(/\*\*/g, '')}</div>
-          <div
-            style={{
-              opacity: 0.6,
-              display: '-webkit-box',
-              WebkitLineClamp: 4,
-              WebkitBoxOrient: 'vertical',
-              overflow: 'hidden',
-            }}
-          >
-            {sum.briefing.open.replace(/\*\*/g, '')}
-          </div>
+          <div style={{ opacity: 0.9 }}>{sum.briefing.lead}</div>
+          {sum.briefing.changed && (
+            <div
+              style={{
+                opacity: 0.6,
+                marginTop: 2,
+                display: '-webkit-box',
+                WebkitLineClamp: 3,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+              }}
+            >
+              <span style={{ color: CYAN, opacity: 0.7 }}>changed: </span>
+              {sum.briefing.changed}
+            </div>
+          )}
+          {sum.briefing.signoff && (
+            <div style={{ marginTop: 4, fontStyle: 'italic', color: CYAN, opacity: 0.7 }}>
+              “{sum.briefing.signoff}”
+            </div>
+          )}
         </Section>
       )}
     </div>

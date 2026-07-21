@@ -22,6 +22,44 @@ const CELL_RE = /^[NS]\d{2}[EW]\d{3}$/;
 const EMERGENCY_SQUAWKS = new Set(['7500', '7600', '7700']);
 const OVERHEAD_RADIUS_MI = 150;
 
+const BRIEF_HEADER_RE = /^(morning brief|night watch|orrery\b|.*24h window)/i;
+const BRIEF_LABEL_RE = /^(what changed|inferred|unknown|data health|confidence)\s*:/i;
+
+/** Truncate at a sentence boundary before `max`; never mid-word. */
+function sentenceTrim(text: string, max: number): string {
+  const t = text.trim();
+  if (t.length <= max) return t;
+  const window = t.slice(0, max);
+  const lastEnd = Math.max(window.lastIndexOf('. '), window.lastIndexOf('? '), window.lastIndexOf('! '));
+  if (lastEnd > max * 0.5) return t.slice(0, lastEnd + 1);
+  const lastSpace = window.lastIndexOf(' ');
+  return (lastSpace > 0 ? t.slice(0, lastSpace) : window).trimEnd() + '…';
+}
+
+/**
+ * Carve a glanceable snippet from the full briefing: the bottom-line verdict,
+ * the "what changed" line, and the duty-officer sign-off — dropping the
+ * boilerplate header (the date is shown separately) and cutting on sentence
+ * boundaries. Signature-neutral to quiet nights (changed/signoff → null).
+ */
+function extractBriefing(b: { date_local: string; body_md: string; quiet: boolean }) {
+  const paras = b.body_md
+    .split('\n')
+    .map((l) => l.replace(/^#+\s*/, '').replace(/\*\*/g, '').trim())
+    .filter(Boolean);
+  if (paras[0] && BRIEF_HEADER_RE.test(paras[0])) paras.shift();
+
+  const lead = paras[0] ? sentenceTrim(paras[0], 240) : '';
+  const changedRaw = paras.find((p) => /^what changed\s*:/i.test(p));
+  const changed = changedRaw ? sentenceTrim(changedRaw.replace(/^what changed\s*:\s*/i, ''), 300) : null;
+
+  const last = paras[paras.length - 1] ?? '';
+  const signoff =
+    last && last.length <= 130 && !BRIEF_LABEL_RE.test(last) && last !== paras[0] ? last : null;
+
+  return { date: b.date_local, quiet: b.quiet, lead, changed, signoff };
+}
+
 interface BaselineRow {
   cell: string;
   hour: number;
@@ -170,10 +208,7 @@ export function registerApi(
       );
 
       const b = briefing.rows[0] as { date_local: string; body_md: string; quiet: boolean } | undefined;
-      const briefLines = (b?.body_md ?? '')
-        .split('\n')
-        .map((l) => l.replace(/^#+\s*/, '').trim())
-        .filter(Boolean);
+      const briefingSnippet = b ? extractBriefing(b) : null;
 
       // Signal context: place words, distance from home, live-aircraft state,
       // route (cached adsbdb; squawk signals only — ≤5 lookups per request,
@@ -247,9 +282,7 @@ export function registerApi(
           dataAgeS: Math.max(0, Math.round(nowMs / 1000 - feed.snapshotFetchedAt())),
         },
         signals: enrichedSignals,
-        briefing: b
-          ? { date: b.date_local, quiet: b.quiet, headline: briefLines[0] ?? '', open: briefLines.slice(1, 4).join(' ').slice(0, 240) }
-          : null,
+        briefing: briefingSnippet,
         integrity,
         integrityAllNominal: integrity.every((r) => r.verdict === 'nominal' || r.verdict === 'no-data'),
         overhead: { count: overheadCount, milCount, tops: tops.slice(0, 4) },

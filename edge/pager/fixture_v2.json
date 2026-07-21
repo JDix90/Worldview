@@ -1,7 +1,14 @@
 {
   "generatedAt": "2026-07-20T21:00:00.000Z",
-  "home": { "lat": 39.74, "lon": -104.99 },
-  "feed": { "live": true, "aircraft": 9412, "dataAgeS": 41 },
+  "home": {
+    "lat": 39.74,
+    "lon": -104.99
+  },
+  "feed": {
+    "live": true,
+    "aircraft": 9412,
+    "dataAgeS": 41
+  },
   "signals": [
     {
       "severity": "S2",
@@ -13,12 +20,17 @@
       "place": "near Albuquerque, US",
       "distMi": 92,
       "bearing": "SSW",
-      "aircraft": { "callsign": "SWA1846", "altFt": 34000, "live": true, "stillSquawking": true },
-      "route": "Denver → Phoenix"
+      "aircraft": {
+        "callsign": "SWA1846",
+        "altFt": 34000,
+        "live": true,
+        "stillSquawking": true
+      },
+      "route": "Denver \u2192 Phoenix"
     },
     {
       "severity": "S2",
-      "what": "2 aircraft squawking 7700 within 500 km of each other inside 30 min — not a routine diversion pattern.",
+      "what": "2 aircraft squawking 7700 within 500 km of each other inside 30 min \u2014 not a routine diversion pattern.",
       "region": "N40W085",
       "disposition": "noise",
       "narrative": "Two unrelated medical diversions; both aircraft landed normally per track data.",
@@ -26,12 +38,17 @@
       "place": "near Indianapolis, US",
       "distMi": 1010,
       "bearing": "E",
-      "aircraft": { "callsign": null, "altFt": null, "live": false, "stillSquawking": false },
+      "aircraft": {
+        "callsign": null,
+        "altFt": null,
+        "live": false,
+        "stillSquawking": false
+      },
       "route": null
     },
     {
       "severity": "S2",
-      "what": "EJA520 squawking 7500 (unlawful interference), 2 observation(s), single network — below the corroborated-S1 bar, watching.",
+      "what": "EJA520 squawking 7500 (unlawful interference), 2 observation(s), single network \u2014 below the corroborated-S1 bar, watching.",
       "region": "N30E050",
       "disposition": "unexplained",
       "narrative": "Fractional bizjet over the Gulf; 7500 held two polls then cleared. Consistent with transponder mis-set.",
@@ -39,31 +56,81 @@
       "place": "near Dubai, AE",
       "distMi": 7800,
       "bearing": "NNE",
-      "aircraft": { "callsign": "EJA520", "altFt": 41000, "live": true, "stillSquawking": false },
+      "aircraft": {
+        "callsign": "EJA520",
+        "altFt": 41000,
+        "live": true,
+        "stillSquawking": false
+      },
       "route": null
     }
   ],
   "briefing": {
     "date": "2026-07-20T00:00:00.000Z",
     "quiet": false,
-    "headline": "ORRERY — Night Watch Briefing, 20 Jul 2026",
-    "open": "Coverage nominal. One radio-failure squawk near home region worth a glance; Baltic corridor remains noisy but consistent with its baseline."
+    "lead": "Nothing rises to S1. Baselines remain immature \u2014 the instrument is still learning what normal looks like in most regions, so treat all deviation figures as provisional.",
+    "changed": "a persistent run of small 7700-cluster flags rolling through US airspace all day, plus recurring GPS integrity degradation in three known contested zones.",
+    "signoff": "Another night, another parade of transponders crying wolf. Coffee's on."
   },
   "integrity": [
-    { "name": "Baltic / Kaliningrad corridor", "verdict": "severe", "pct": 51 },
-    { "name": "Black Sea", "verdict": "nominal", "pct": 9 },
-    { "name": "Eastern Mediterranean", "verdict": "nominal", "pct": 4 },
-    { "name": "Persian Gulf", "verdict": "nominal", "pct": 11 }
+    {
+      "name": "Baltic / Kaliningrad corridor",
+      "verdict": "severe",
+      "pct": 51
+    },
+    {
+      "name": "Black Sea",
+      "verdict": "nominal",
+      "pct": 9
+    },
+    {
+      "name": "Eastern Mediterranean",
+      "verdict": "nominal",
+      "pct": 4
+    },
+    {
+      "name": "Persian Gulf",
+      "verdict": "nominal",
+      "pct": 11
+    }
   ],
   "integrityAllNominal": false,
   "overhead": {
     "count": 14,
     "milCount": 1,
     "tops": [
-      { "callsign": "UAL421", "altFt": 12400, "distMi": 8, "bearing": "NE", "mil": false, "typeDesc": null },
-      { "callsign": "SKW5312", "altFt": 21000, "distMi": 23, "bearing": "S", "mil": false, "typeDesc": null },
-      { "callsign": "EVAC91", "altFt": 26000, "distMi": 41, "bearing": "WNW", "mil": true, "typeDesc": "Boeing KC-135R Stratotanker" },
-      { "callsign": "FFT210", "altFt": 36000, "distMi": 66, "bearing": "ESE", "mil": false, "typeDesc": null }
+      {
+        "callsign": "UAL421",
+        "altFt": 12400,
+        "distMi": 8,
+        "bearing": "NE",
+        "mil": false,
+        "typeDesc": null
+      },
+      {
+        "callsign": "SKW5312",
+        "altFt": 21000,
+        "distMi": 23,
+        "bearing": "S",
+        "mil": false,
+        "typeDesc": null
+      },
+      {
+        "callsign": "EVAC91",
+        "altFt": 26000,
+        "distMi": 41,
+        "bearing": "WNW",
+        "mil": true,
+        "typeDesc": "Boeing KC-135R Stratotanker"
+      },
+      {
+        "callsign": "FFT210",
+        "altFt": 36000,
+        "distMi": 66,
+        "bearing": "ESE",
+        "mil": false,
+        "typeDesc": null
+      }
     ]
   },
   "shadowS1Last24h": 0

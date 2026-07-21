@@ -607,16 +607,31 @@ def _page_briefing(d, s, _sys, _summ, L: Layout) -> None:
     tag = "QUIET" if b.get("quiet") else "ACTIVE"
     d.text((L.w - L.pad - d.textlength(tag, font=L.sm), y0), tag,
            font=L.sm, fill=DIM if b.get("quiet") else AMBER)
-    y = y0 + L.line_sm + 6
+    y = y0 + L.line_sm + 8
     max_w = L.w - 2 * L.pad
-    for ln in _wrap(d, _demark(b.get("headline", "")), L.md, max_w)[:2]:
+    # lead: the bottom-line verdict (prominent)
+    for ln in _wrap(d, _demark(b.get("lead", "")), L.md, max_w):
         d.text((L.pad, y), ln, font=L.md, fill=WHITE)
         y += L.line_md
-    y += 4
-    body_lines = (L.h - L.footer_h - y) // L.line_sm
-    for ln in _wrap(d, _demark(b.get("open", "")), L.sm, max_w)[:body_lines]:
-        d.text((L.pad, y), ln, font=L.sm, fill=DIM)
+    # what-changed: the substance (dim, fills the middle), leaving room for the
+    # sign-off pinned near the footer
+    signoff = _demark(b.get("signoff") or "")
+    reserve = (L.line_sm * 2 + 6) if signoff else 0
+    changed = b.get("changed")
+    if changed:
+        y += 4
+        d.text((L.pad, y), "changed", font=L.sm, fill=CYAN)
         y += L.line_sm
+        budget = (L.h - L.footer_h - reserve - y) // L.line_sm
+        for ln in _wrap(d, _demark(changed), L.sm, max_w)[:max(0, budget)]:
+            d.text((L.pad, y), ln, font=L.sm, fill=DIM)
+            y += L.line_sm
+    # sign-off: the duty-officer tagline, near the bottom
+    if signoff:
+        sy = L.h - L.footer_h - reserve + 2
+        for ln in _wrap(d, f'"{signoff}"', L.sm, max_w)[:2]:
+            d.text((L.pad, sy), ln, font=L.sm, fill=CYAN)
+            sy += L.line_sm
 
 
 def _page_local(d, s, _sys, _summ, L: Layout) -> None:
