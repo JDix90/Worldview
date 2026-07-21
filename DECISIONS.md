@@ -246,6 +246,10 @@ Running log. Every non-obvious choice gets a line: what was decided, why, what w
 
 96. **Home is set by typing, not panning.** The v1 camera-center gesture failed exactly as the owner predicted — a stray click on the auto-rotating globe set home to the mid-Pacific (lat 24, lng −155.8, found in Redis during verification). v2: the chip opens an input; a 5-digit zip resolves via zippopotam.us (precise), names via Open-Meteo's geocoder — both keyless, CORS-open, client-direct (server untouched beyond a `label` on GET). Verification caught a second trap: Open-Meteo fuzzy-matches raw strings ("Springfield MO" → Wilbraham, *Massachusetts*), so the client parses trailing state codes and filters ranked results by state — "Springfield MO" → Springfield, Missouri ✓, "Tokyo" → Tokyo ✓, gibberish → inline "not found". Empty Enter still uses the globe center (deliberate now, not accidental).
 
+## 2026-07-21 — LOCATION rename + HOME dashboard (browser)
+
+97. **The globe gets a HOME dashboard; the setter chip becomes LOCATION.** Design economy: the dashboard consumes the same `/api/pager/summary` the appliance panel renders — zero new server surface — plus client-direct Open-Meteo current weather at home (keyless, CORS-open, same provider as wind/geocoding). Sections: status header with ⤓ fly-home (animated pointOfView; stalls only in the rAF-throttled test pane, verified correct via duration-0 probe), weather, overhead top-4, nearby signals (<500 mi, full analyst narratives — the browser has room the 480×320 panel doesn't), GPS-watch exceptions, briefing clamp. Verified live: 79°F drizzle at Denver, 128 aircraft overhead (DAL1188 9 mi NW), correct "nothing near you · 5 signals elsewhere" empty state.
+
 ### Assumptions pending owner confirmation
 
 - OpenSky registered account + API client will be created by the owner; credentials into `.env`. **Blocks the collector chunk.**

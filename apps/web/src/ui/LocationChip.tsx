@@ -127,7 +127,7 @@ async function geocode(q: string): Promise<GeoHit | null> {
   return { lat: r.latitude, lon: r.longitude, label: region ? `${r.name}, ${region}` : r.name };
 }
 
-export function HomeChip() {
+export function LocationChip() {
   const [open, setOpen] = useState(false);
   const [current, setCurrent] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
@@ -207,11 +207,11 @@ export function HomeChip() {
       <div
         style={{ ...chip, color: flash ? '#6be36b' : (chip.color as string) }}
         onClick={() => (flash ? null : setOpen((o) => !o))}
-        title="Set the appliance's home anchor — type a city/zip, or leave empty to use the globe's current center"
+        title="Set the home location (city/zip, or empty = globe center) — anchors the appliance display and the HOME dashboard"
       >
         {flash ?? (
           <>
-            HOME <span style={{ color: '#4fd8ff' }}>⌂</span>
+            LOCATION <span style={{ color: '#4fd8ff' }}>⌖</span>
           </>
         )}
       </div>
