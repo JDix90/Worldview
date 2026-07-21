@@ -268,6 +268,10 @@ Running log. Every non-obvious choice gets a line: what was decided, why, what w
 
 102. **The instrument now shows its own pulse.** Two read-only stats endpoints (`/api/stats/traffic24h` from rollup_run, `/api/stats/learning` from baseline maturity counts via shared `maturityOf`); the FEED panel leads with a 24 h world-traffic sparkline (SVG, 287 points verified against psql) + a learning line ("43% partial · 0% mature · 22,275 bins" — the honest march toward the Go/No-Go); the Pi SYSTEM page draws the same curve in PIL (two config-trivia rows dropped to make room). **Fly-to glue**: `LayerCard.fly` + ObjectCard `⤓ fly` + feed-row `⤓` (signal `where` coords) — populated in quakes/events/cyclones/fires/launches/vessels. Click-through spy-verified (real signal coords → camera). Zero rollup buckets lost in the server rebuild.
 
+## 2026-07-21 — Space weather (brainstorm part 2 of 3)
+
+103. **The instrument explains the sun.** SWPC spike results (all keyless, CORS `*`): Kp now+forecast = `products/noaa-planetary-k-index-forecast.json` (observed/estimated/predicted rows); X-ray = `json/goes/primary/xray-flares-latest.json` (`current_class` pre-formatted — no flux math); solar wind = `products/geospace/propagated-solar-wind-1-hour.json` (speed idx 1, Bz idx 6). New shared [sky/spaceWeather.ts](apps/web/src/sky/spaceWeather.ts): fetchers + dipole geomagnetic-latitude (2025 CGM pole 80.9N 72.7W) + `auroraVerdict` (oval boundary ≈ maglat 66−2·Kp, horizon within 5° below). Dashboard SPACE WEATHER section (Kp banded ≥5 amber ≥7 red, X-ray + last flare, wind + Bz, plain-language tooltips, aurora verdict). Pi: Kp-forecast fetch in the conditions cycle; TODAY shows an aurora line only when verdict ≠ none (rare = newsworthy) and Python port sanity-checked (Denver maglat 47.2 → Kp7 horizon; Fairbanks 65.7 → Kp2 overhead). Verified live: Kp 3.0 quiet, C1.7 flux, real C2.5 flare, 285 km/s wind, honest "not visible at your latitude."
+
 ### Assumptions pending owner confirmation
 
 - OpenSky registered account + API client will be created by the owner; credentials into `.env`. **Blocks the collector chunk.**

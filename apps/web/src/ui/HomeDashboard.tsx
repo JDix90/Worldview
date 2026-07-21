@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiGet } from '../feed/api';
 import { fetchRoute } from '../feed/routes';
+import { fetchSpaceWeather, auroraVerdict, type SpaceWeather } from '../sky/spaceWeather';
 
 const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 
@@ -147,6 +148,16 @@ export function HomeDashboard() {
   const [wx, setWx] = useState<Weather | null>(null);
   const [routes, setRoutes] = useState<Record<string, string>>({});
   const [cond, setCond] = useState<Conditions>({ aqi: null, alerts: [], fires: null });
+  const [sw, setSw] = useState<SpaceWeather | null>(null);
+  const swTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+
+  useEffect(() => {
+    if (!open) return;
+    const load = () => void fetchSpaceWeather().then(setSw).catch(() => {});
+    load();
+    swTimer.current = setInterval(load, 15 * 60_000);
+    return () => clearInterval(swTimer.current);
+  }, [open]);
   const sumTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const wxTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
@@ -427,6 +438,50 @@ export function HomeDashboard() {
           </div>
         )}
       </Section>
+
+      {sw && (
+        <Section title="SPACE WEATHER">
+          {sw.kpNow != null && (
+            <div title="Planetary K-index: geomagnetic activity now, and the max forecast for the next 24h. ≥5 = storm.">
+              Kp{' '}
+              <span style={{ color: sw.kpNow >= 7 ? RED : sw.kpNow >= 5 ? AMBER : GREEN }}>
+                {sw.kpNow.toFixed(1)}
+              </span>
+              {sw.kpMax24h != null && (
+                <span style={{ opacity: 0.65 }}>
+                  {' '}· max fcst{' '}
+                  <span style={{ color: sw.kpMax24h >= 7 ? RED : sw.kpMax24h >= 5 ? AMBER : 'inherit' }}>
+                    {sw.kpMax24h.toFixed(1)}
+                  </span>
+                  {sw.kpMax24h >= 5 ? ' (storm watch)' : ' (quiet)'}
+                </span>
+              )}
+            </div>
+          )}
+          {sw.xrayClass && (
+            <div title="GOES X-ray flux class: A/B quiet, C low, M moderate (radio blackouts), X major.">
+              X-ray {sw.xrayClass}
+              {sw.lastFlare && <span style={{ opacity: 0.55 }}> · last flare {sw.lastFlare}</span>}
+            </div>
+          )}
+          {sw.windKms != null && (
+            <div title="Solar wind speed at Earth; Bz strongly negative (southward) lets energy couple into the magnetosphere.">
+              solar wind {sw.windKms} km/s
+              {sw.windBz != null && <span style={{ opacity: 0.55 }}> · Bz {sw.windBz} nT</span>}
+            </div>
+          )}
+          {sum?.home && (() => {
+            const v = auroraVerdict(sw.kpMax24h ?? sw.kpNow, sum.home.lat, sum.home.lon);
+            return v === 'none' ? (
+              <div style={{ opacity: 0.45 }}>aurora: not visible at your latitude tonight</div>
+            ) : (
+              <div style={{ color: v === 'overhead' ? GREEN : AMBER }}>
+                aurora {v === 'overhead' ? 'likely overhead' : 'possible low on the northern horizon'} — look north late
+              </div>
+            );
+          })()}
+        </Section>
+      )}
 
       {sum?.briefing && (
         <Section

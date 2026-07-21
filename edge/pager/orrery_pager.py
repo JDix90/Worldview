@@ -241,6 +241,31 @@ def aqi_band(aqi: int) -> tuple:
     return "very unhealthy", (200, 107, 255)
 
 
+def geomagnetic_lat(lat: float, lon: float) -> float:
+    """Dipole approximation (2025 CGM pole 80.9N 72.7W) — few degrees accuracy."""
+    import math
+    D = math.pi / 180
+    p_lat, p_lon = 80.9 * D, -72.7 * D
+    d = math.acos(
+        math.sin(lat * D) * math.sin(p_lat)
+        + math.cos(lat * D) * math.cos(p_lat) * math.cos(lon * D - p_lon)
+    )
+    return 90 - d / D
+
+
+def aurora_verdict(kp, lat: float, lon: float) -> str:
+    """none|horizon|overhead — oval boundary ~ maglat 66 - 2*Kp."""
+    if kp is None:
+        return "none"
+    maglat = abs(geomagnetic_lat(lat, lon))
+    boundary = 66 - 2 * kp
+    if maglat >= boundary:
+        return "overhead"
+    if maglat >= boundary - 5:
+        return "horizon"
+    return "none"
+
+
 def fetch_local_conditions(lat: float, lon: float) -> dict:
     """One shot of weather + AQI + alerts. Every field optional; failures
     degrade to absent keys (the TODAY page renders dashes)."""
@@ -299,6 +324,19 @@ def fetch_local_conditions(lat: float, lon: float) -> dict:
                 })
     except Exception as e:
         print(f"[display] alerts fetch failed: {e}", file=sys.stderr)
+    try:
+        r = requests.get(
+            "https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json",
+            timeout=8,
+        )
+        r.raise_for_status()
+        rows = r.json()
+        preds = [row["kp"] for row in rows if row.get("observed") == "predicted"][:8]  # next ~24h
+        if preds:
+            out["kp_max"] = max(preds)
+            out["aurora"] = aurora_verdict(out["kp_max"], lat, lon)
+    except Exception as e:
+        print(f"[display] kp fetch failed: {e}", file=sys.stderr)
     return out
 
 
@@ -418,6 +456,12 @@ def _page_today(d, c: dict, L: Layout) -> None:
         d.text((L.pad + d.textlength(aqi_text, font=L.md) + 10, y + 2),
                f"PM2.5 {c.get('pm25', '—')}", font=L.sm, fill=DIM)
         y += L.line_md + 8
+    # aurora line — rare enough to always show when non-none
+    if c.get("aurora") in ("horizon", "overhead"):
+        word = "likely overhead" if c["aurora"] == "overhead" else "possible on the northern horizon"
+        d.text((L.pad, y), f"✦ aurora {word} — look north late", font=L.md,
+               fill=GREEN if c["aurora"] == "overhead" else AMBER)
+        y += L.line_md + 2
     # alerts block — omitted entirely when quiet
     for a in c.get("alerts", []):
         sev = str(a.get("severity", "")).lower()
