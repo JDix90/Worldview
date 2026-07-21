@@ -185,6 +185,122 @@ def overall_status(s: dict) -> str:
 STATUS_RGB = {"green": GREEN, "amber": AMBER, "red": RED, "stale": DIM}
 VERDICT_RGB = {"nominal": GREEN, "elevated": AMBER, "severe": RED, "no-data": DIM}
 
+# ─────────────────────────── local conditions (TODAY page) ───────────────────
+# Living-room role: weather + alerts lead the display. Keyless sources, both
+# verified live: Open-Meteo (forecast + air quality) and NWS active alerts.
+WMO_WORDS = {
+    0: "clear", 1: "mostly clear", 2: "partly cloudy", 3: "overcast",
+    45: "fog", 48: "freezing fog", 51: "light drizzle", 53: "drizzle", 55: "heavy drizzle",
+    56: "freezing drizzle", 57: "freezing drizzle", 61: "light rain", 63: "rain", 65: "heavy rain",
+    66: "freezing rain", 67: "freezing rain", 71: "light snow", 73: "snow", 75: "heavy snow",
+    77: "snow grains", 80: "showers", 81: "showers", 82: "heavy showers",
+    85: "snow showers", 86: "snow showers", 95: "thunderstorm", 96: "hail storm", 99: "hail storm",
+}
+
+RED_ALERT_RE = None  # compiled lazily to keep import cheap
+
+
+def weather_status(alerts: list) -> str:
+    """green|amber|red from NWS alerts — Extreme/Severe or tornado-class = red.
+    Red feeds the same wake-on-red path as instrument reds: a Tornado Warning
+    lights the sleeping living-room screen."""
+    global RED_ALERT_RE
+    if RED_ALERT_RE is None:
+        import re
+
+        RED_ALERT_RE = re.compile(r"tornado|flash flood|blizzard|extreme wind", re.I)
+    worst = "green"
+    for a in alerts:
+        sev = str(a.get("severity", "")).lower()
+        event = str(a.get("event", ""))
+        if sev in ("extreme", "severe") or RED_ALERT_RE.search(event):
+            return "red"
+        worst = "amber"
+    return worst
+
+
+def worse(a: str, b: str) -> str:
+    order = {"green": 0, "stale": 0, "amber": 1, "red": 2}
+    return a if order.get(a, 0) >= order.get(b, 0) else b
+
+
+def compass16(deg: float) -> str:
+    pts = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"]
+    return pts[round(deg / 22.5) % 16]
+
+
+def aqi_band(aqi: int) -> tuple:
+    if aqi <= 50:
+        return "good", GREEN
+    if aqi <= 100:
+        return "moderate", AMBER
+    if aqi <= 150:
+        return "unhealthy (sensitive)", (255, 157, 77)
+    if aqi <= 200:
+        return "unhealthy", RED
+    return "very unhealthy", (200, 107, 255)
+
+
+def fetch_local_conditions(lat: float, lon: float) -> dict:
+    """One shot of weather + AQI + alerts. Every field optional; failures
+    degrade to absent keys (the TODAY page renders dashes)."""
+    out: dict = {"alerts": []}
+    try:
+        r = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": lat, "longitude": lon,
+                "current": "temperature_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m",
+                "daily": "temperature_2m_max,temperature_2m_min,sunrise,sunset",
+                "temperature_unit": "fahrenheit", "wind_speed_unit": "mph", "timezone": "auto",
+            },
+            timeout=8,
+        )
+        r.raise_for_status()
+        d = r.json()
+        c = d.get("current", {})
+        daily = d.get("daily", {})
+        out["temp"] = round(c["temperature_2m"])
+        out["feels"] = round(c["apparent_temperature"])
+        out["cond"] = WMO_WORDS.get(c.get("weather_code"), "—")
+        out["wind"] = f"{round(c['wind_speed_10m'])} mph {compass16(c['wind_direction_10m'])}"
+        out["hi"] = round(daily["temperature_2m_max"][0])
+        out["lo"] = round(daily["temperature_2m_min"][0])
+        out["sunrise"] = daily["sunrise"][0][-5:]
+        out["sunset"] = daily["sunset"][0][-5:]
+    except Exception as e:
+        print(f"[display] weather fetch failed: {e}", file=sys.stderr)
+    try:
+        r = requests.get(
+            "https://air-quality-api.open-meteo.com/v1/air-quality",
+            params={"latitude": lat, "longitude": lon, "current": "us_aqi,pm2_5"},
+            timeout=8,
+        )
+        r.raise_for_status()
+        c = r.json().get("current", {})
+        out["aqi"] = round(c["us_aqi"])
+        out["pm25"] = round(c["pm2_5"], 1)
+    except Exception as e:
+        print(f"[display] aqi fetch failed: {e}", file=sys.stderr)
+    try:
+        r = requests.get(
+            f"https://api.weather.gov/alerts/active?point={lat},{lon}",
+            headers={"User-Agent": "ORRERY living-room display (personal)"},
+            timeout=8,
+        )
+        if r.ok:  # non-US home → 404/empty, gracefully absent
+            for f in r.json().get("features", [])[:3]:
+                p = f.get("properties", {})
+                end = (p.get("ends") or p.get("expires") or "")
+                out["alerts"].append({
+                    "event": p.get("event", "Alert"),
+                    "severity": p.get("severity", ""),
+                    "until": end[11:16] if len(end) >= 16 else "",
+                })
+    except Exception as e:
+        print(f"[display] alerts fetch failed: {e}", file=sys.stderr)
+    return out
+
 
 # ─────────────────────────── text helpers ───────────────────────────
 def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_w: int) -> list[str]:
@@ -220,12 +336,13 @@ def _ago(sec: int) -> str:
 
 
 # ─────────────────────────── page rendering ───────────────────────────
-# LOCAL replaced INTEGRITY (owner critique 2026-07-20: far-away GPS regions
-# aren't actionable; integrity is exceptions-only on STATUS now).
-PAGES = ["STATUS", "SIGNALS", "BRIEFING", "LOCAL", "SYSTEM"]
+# Living-room lineup (2026-07-21): TODAY (weather/alerts) leads; instrument
+# vitals moved to SYSTEM; GPS jamming left the Pi entirely (browser only).
+PAGES = ["TODAY", "SIGNALS", "BRIEFING", "LOCAL", "SYSTEM"]
 
 
-def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout) -> Image.Image:
+def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
+           conditions: Optional[dict] = None) -> Image.Image:
     img = Image.new("RGB", (L.w, L.h), BG)
     d = ImageDraw.Draw(img)
     page = PAGES[page_idx]
@@ -239,6 +356,9 @@ def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout) 
         status = overall_status(summary.raw)
         if summary.stale_s > POLL_SEC * 3:
             status = "stale"
+    # weather severity shares the dot: a Tornado Warning is a red, full stop
+    if conditions:
+        status = worse(status, weather_status(conditions.get("alerts", [])))
     r = L.header_h // 3
     cy = L.header_h // 2
     d.ellipse((L.w - L.pad - 2 * r, cy - r, L.w - L.pad, cy + r), fill=STATUS_RGB[status])
@@ -252,15 +372,64 @@ def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout) 
         return img
 
     s = summary.raw
-    {
-        "STATUS": _page_status,
-        "SIGNALS": _page_signals,
-        "BRIEFING": _page_briefing,
-        "LOCAL": _page_local,
-        "SYSTEM": _page_system,
-    }[page](d, s, sysinfo, summary, L)
+    if page == "TODAY":
+        _page_today(d, conditions or {}, L)
+    else:
+        {
+            "SIGNALS": _page_signals,
+            "BRIEFING": _page_briefing,
+            "LOCAL": _page_local,
+            "SYSTEM": _page_system,
+        }[page](d, s, sysinfo, summary, L)
     _footer(d, page_idx, sysinfo, L)
     return img
+
+
+def _page_today(d, c: dict, L: Layout) -> None:
+    """The living-room glance: big weather, alerts, AQI. All fields optional."""
+    y0 = L.header_h + L.pad
+    temp = c.get("temp")
+    # big temperature + condition
+    d.text((L.pad, y0), f"{temp}°" if temp is not None else "—", font=L.huge, fill=WHITE)
+    tw = d.textlength(f"{temp}°" if temp is not None else "—", font=L.huge)
+    d.text((L.pad + tw + 12, y0 + round(L.huge.size * 0.15)), c.get("cond", ""), font=L.lg, fill=CYAN)
+    if c.get("feels") is not None and c.get("feels") != temp:
+        d.text((L.pad + tw + 12, y0 + round(L.huge.size * 0.15) + L.line_md + 4),
+               f"feels {c['feels']}°", font=L.sm, fill=DIM)
+    y = y0 + round(L.huge.size * 1.35)
+    # high/low + wind
+    hilo = []
+    if c.get("hi") is not None:
+        hilo.append(f"H {c['hi']}°  L {c['lo']}°")
+    if c.get("wind"):
+        hilo.append(f"wind {c['wind']}")
+    if hilo:
+        d.text((L.pad, y), "   ".join(hilo), font=L.md, fill=WHITE)
+        y += L.line_md + 4
+    # sun times
+    if c.get("sunrise"):
+        d.text((L.pad, y), f"☀ {c['sunrise']} → {c['sunset']}", font=L.sm, fill=DIM)
+        y += L.line_sm + 6
+    # AQI
+    if c.get("aqi") is not None:
+        word, col = aqi_band(c["aqi"])
+        aqi_text = f"AQI {c['aqi']} — {word}"
+        d.text((L.pad, y), aqi_text, font=L.md, fill=col)
+        d.text((L.pad + d.textlength(aqi_text, font=L.md) + 10, y + 2),
+               f"PM2.5 {c.get('pm25', '—')}", font=L.sm, fill=DIM)
+        y += L.line_md + 8
+    # alerts block — omitted entirely when quiet
+    for a in c.get("alerts", []):
+        sev = str(a.get("severity", "")).lower()
+        is_red = weather_status([a]) == "red"
+        col = RED if is_red else AMBER
+        line = f"⚠ {a.get('event', 'Alert')}"
+        if a.get("until"):
+            line += f" · until {a['until']}"
+        d.text((L.pad, y), line, font=L.md, fill=col)
+        y += L.line_md + 2
+        if y > L.h - L.footer_h - L.line_md:
+            break
 
 
 def _footer(d: ImageDraw.ImageDraw, page_idx: int, sysinfo: dict, L: Layout) -> None:
@@ -279,71 +448,6 @@ def _footer(d: ImageDraw.ImageDraw, page_idx: int, sysinfo: dict, L: Layout) -> 
 def _col_x(L: Layout) -> int:
     """Landscape: x where the right column starts."""
     return L.w // 2 + L.pad
-
-
-def _page_status(d, s, _sys, summ, L: Layout) -> None:
-    feed = s["feed"]
-    st = overall_status(s)
-    y0 = L.header_h + L.pad
-    d.text((L.pad, y0), {"green": "NOMINAL", "amber": "ELEVATED", "red": "ATTENTION"}[st],
-           font=L.lg, fill=STATUS_RGB[st])
-    d.text((L.pad, y0 + L.line_md * 2), "FEED", font=L.sm, fill=DIM)
-    d.text((L.pad, y0 + L.line_md * 2 + L.line_sm), "LIVE" if feed["live"] else "DOWN",
-           font=L.huge, fill=GREEN if feed["live"] else RED)
-    yb = y0 + L.line_md * 2 + L.line_sm + round(L.huge.size * 1.3)
-    d.text((L.pad, yb), f"{feed['aircraft']:,} aircraft", font=L.md, fill=WHITE)
-    d.text((L.pad, yb + L.line_md), f"data {feed['dataAgeS']}s old", font=L.sm, fill=DIM)
-
-    n_sig = len(s.get("signals", []))
-    s1 = s.get("shadowS1Last24h", 0)
-    over = s.get("overhead") or {}
-    over_line = None
-    if over.get("count") is not None:
-        over_line = f"{over['count']} aircraft"
-        if over.get("milCount"):
-            over_line += f" · {over['milCount']} mil"
-
-    # GPS integrity: exceptions only — quiet things earn one line
-    exceptions = [r for r in s.get("integrity", []) if r.get("verdict") in ("elevated", "severe")]
-
-    if L.landscape:
-        x = _col_x(L)
-        d.text((x, y0), f"{n_sig} open signal{'s' if n_sig != 1 else ''}", font=L.md, fill=WHITE)
-        d.text((x, y0 + L.line_md), f"{s1} S1 shadow / 24h", font=L.sm, fill=AMBER if s1 else DIM)
-        yy = y0 + L.line_md * 2 + L.pad
-        if over_line:
-            d.text((x, yy), "OVERHEAD", font=L.sm, fill=CYAN)
-            d.text((x, yy + L.line_sm), over_line, font=L.md,
-                   fill=AMBER if over.get("milCount") else WHITE)
-            yy += L.line_sm + L.line_md + L.pad
-        d.text((x, yy), "GPS WATCH", font=L.sm, fill=CYAN)
-        yy += L.line_sm + 2
-        if not exceptions:
-            d.text((x, yy), "all regions nominal", font=L.sm, fill=GREEN)
-            yy += L.line_sm + 4
-        else:
-            for r in exceptions[:3]:
-                v = r.get("verdict")
-                pct = r.get("pct")
-                name = r.get("name", "")
-                short = name if len(name) <= 20 else name[:19] + "…"
-                label = v.upper() if pct is None else f"{v.upper()} {pct}%"
-                d.text((x, yy), f"{short}", font=L.sm, fill=WHITE)
-                d.text((x, yy + L.line_sm), label, font=L.sm, fill=VERDICT_RGB.get(v, DIM))
-                yy += L.line_sm * 2 + 4
-        d.text((L.pad, L.h - L.footer_h - L.line_sm - 4),
-               f"synced {_ago(summ.stale_s)} ago", font=L.sm, fill=DIM)
-    else:
-        yb2 = yb + L.line_md * 2
-        d.text((L.pad, yb2), f"{n_sig} open signal{'s' if n_sig != 1 else ''}", font=L.md, fill=WHITE)
-        if over_line:
-            d.text((L.pad, yb2 + L.line_md), over_line, font=L.sm, fill=WHITE)
-            yb2 += L.line_sm
-        d.text((L.pad, yb2 + L.line_md), f"{s1} S1 shadow / 24h", font=L.sm, fill=AMBER if s1 else DIM)
-        gps = "GPS watch: all nominal" if not exceptions else f"GPS: {exceptions[0].get('name','')[:14]} {exceptions[0].get('verdict','').upper()}"
-        d.text((L.pad, yb2 + L.line_md + L.line_sm + 2), gps, font=L.sm,
-               fill=GREEN if not exceptions else VERDICT_RGB.get(exceptions[0].get("verdict"), DIM))
-        d.text((L.pad, yb2 + L.line_md + L.line_sm * 2 + 6), f"synced {_ago(summ.stale_s)} ago", font=L.sm, fill=DIM)
 
 
 def _sig_kind(what: str) -> str:
@@ -473,7 +577,11 @@ def _page_local(d, s, _sys, _summ, L: Layout) -> None:
 def _page_system(d, s, sysinfo, summ, L: Layout) -> None:
     y0 = L.header_h + L.pad
     d.text((L.pad, y0), "SYSTEM", font=L.sm, fill=CYAN)
+    feed = s.get("feed", {})
     rows = [
+        ("feed", ("LIVE" if feed.get("live") else "DOWN") + f" · {feed.get('aircraft', 0):,} aircraft" if feed else "—"),
+        ("S1 shadow", f"{s.get('shadowS1Last24h', 0)} / 24h"),
+        ("signals", f"{len(s.get('signals', []))} open"),
         ("battery", f"{sysinfo['battery_pct']}%" if sysinfo.get("battery_pct") is not None else "—"),
         ("power", sysinfo.get("power", "—")),
         ("wifi", sysinfo.get("wifi", "—")),
@@ -732,6 +840,8 @@ class App:
     summary: Optional[Summary] = None
     _dirty: bool = True
     # screen-sleep state
+    conditions: Optional[dict] = None
+    _cond_at: float = 0.0
     _mode: str = "auto"          # 'on' | 'off' | 'auto', newest writer wins
     _mode_ts: float = 0.0
     _awake: bool = True
@@ -753,6 +863,20 @@ class App:
                 self.summary = Summary(raw={}, fetched_at=time.time(), ok=False)
             print(f"[display] poll failed: {e}", file=sys.stderr)
         self._fetch_server_mode()
+        self._refresh_conditions()
+        self._dirty = True
+
+    def _refresh_conditions(self) -> None:
+        """Weather/AQI/alerts for the TODAY page, every 10 min, at the home
+        coords the summary already carries."""
+        if time.time() - self._cond_at < 600:
+            return
+        home = (self.summary.raw.get("home") if self.summary and self.summary.ok else None) or {}
+        lat, lon = home.get("lat"), home.get("lon")
+        if lat is None or lon is None:
+            return
+        self._cond_at = time.time()
+        self.conditions = fetch_local_conditions(lat, lon)
         self._dirty = True
 
     def _fetch_server_mode(self) -> None:
@@ -801,6 +925,8 @@ class App:
         status = "stale"
         if self.summary and self.summary.ok:
             status = overall_status(self.summary.raw)
+        if self.conditions:
+            status = worse(status, weather_status(self.conditions.get("alerts", [])))
         awake = decide_awake(
             self._mode,
             now.tm_hour * 60 + now.tm_min,
@@ -837,7 +963,7 @@ class App:
         return info
 
     def draw(self) -> None:
-        img = render(self.summary, self.page_idx, self.sysinfo(), self.layout)
+        img = render(self.summary, self.page_idx, self.sysinfo(), self.layout, self.conditions)
         self.backend.blit(img)
         led = STATUS_RGB["stale"]
         if self.summary and self.summary.ok:
@@ -878,7 +1004,8 @@ class App:
             if not self._awake:
                 time.sleep(0.2)
                 continue
-            if CAROUSEL_SEC > 0 and time.time() - self._last_input >= CAROUSEL_SEC:
+            dwell = CAROUSEL_SEC * (2.5 if self.page_idx == 0 else 0.8) if CAROUSEL_SEC > 0 else 0
+            if dwell > 0 and time.time() - self._last_input >= dwell:
                 self._last_input = time.time()
                 self.next_page()
             clock = time.strftime("%H:%M")
@@ -930,6 +1057,28 @@ def selftest() -> int:
     ok = got is False
     fails += 0 if ok else 1
     print(f"  {'PASS' if ok else 'FAIL'}  non-midnight-crossing window: awake={got} (want False)")
+    # weather-status + combine (living-room wake semantics)
+    ws_cases = [
+        ("no alerts green", [], "green"),
+        ("advisory amber", [{"event": "Heat Advisory", "severity": "Moderate"}], "amber"),
+        ("severe red", [{"event": "High Wind Warning", "severity": "Severe"}], "red"),
+        ("tornado red by name", [{"event": "Tornado Warning", "severity": "Unknown"}], "red"),
+        ("flash flood red", [{"event": "Flash Flood Warning", "severity": "Moderate"}], "red"),
+    ]
+    for desc, alerts, expect in ws_cases:
+        got = weather_status(alerts)
+        ok = got == expect
+        fails += 0 if ok else 1
+        print(f"  {'PASS' if ok else 'FAIL'}  {desc}: {got} (want {expect})")
+    for desc, a, b, expect in [
+        ("worse(green,red)", "green", "red", "red"),
+        ("worse(amber,green)", "amber", "green", "amber"),
+        ("worse(stale,amber)", "stale", "amber", "amber"),
+    ]:
+        got = worse(a, b)
+        ok = got == expect
+        fails += 0 if ok else 1
+        print(f"  {'PASS' if ok else 'FAIL'}  {desc}: {got} (want {expect})")
     print(f"selftest: {'ALL PASS' if fails == 0 else f'{fails} FAILURES'}")
     return fails
 
@@ -973,8 +1122,18 @@ def main() -> None:
         data = json.load(open(args.shot_all))
         summ = Summary(raw=data, fetched_at=time.time(), ok=True)
         sysinfo = {"battery_pct": 82, "wifi": "home", "clock": "07:14", "power": "AC"}
+        cond_calm = {"temp": 88, "feels": 85, "cond": "partly cloudy", "wind": "9 mph SSW",
+                     "hi": 96, "lo": 68, "sunrise": "05:42", "sunset": "20:27",
+                     "aqi": 76, "pm25": 4.5, "alerts": []}
+        cond_alerts = dict(cond_calm, alerts=[
+            {"event": "Air Quality Alert", "severity": "Unknown", "until": "16:00"},
+            {"event": "Heat Advisory", "severity": "Moderate", "until": "21:00"}])
+        cond_tornado = dict(cond_calm, cond="thunderstorm", alerts=[
+            {"event": "Tornado Warning", "severity": "Extreme", "until": "19:45"}])
         for i in range(len(PAGES)):
-            render(summ, i, sysinfo, L).save(os.path.join(args.mock, f"{PAGES[i].lower()}.png"))
+            render(summ, i, sysinfo, L, cond_alerts).save(os.path.join(args.mock, f"{PAGES[i].lower()}.png"))
+        render(summ, 0, sysinfo, L, cond_calm).save(os.path.join(args.mock, "today_calm.png"))
+        render(summ, 0, sysinfo, L, cond_tornado).save(os.path.join(args.mock, "today_tornado.png"))
         render(Summary(raw={}, fetched_at=time.time() - 500, ok=False), 0, sysinfo, L).save(
             os.path.join(args.mock, "no_contact.png"))
         print(f"wrote {len(PAGES) + 1} page PNGs to {args.mock} at {w}x{h}")
