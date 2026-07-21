@@ -122,6 +122,7 @@ export const vesselsLayer: LayerDef = {
           { label: 'SEEN', value: agoShort(v.seenAt) },
         ],
         href: `https://www.vesselfinder.com/vessels/details/${mmsi}`,
+        fly: { lat: v.lat, lng: v.lon },
       });
     }
 

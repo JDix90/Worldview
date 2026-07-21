@@ -45,12 +45,47 @@ const panel: React.CSSProperties = {
   backdropFilter: 'blur(4px)',
 };
 
+/** 24h world-traffic sparkline — the instrument's heartbeat. */
+function Sparkline({ points }: { points: Array<{ ts: number; total: number }> }) {
+  if (points.length < 2) return null;
+  const W = 310, H = 44;
+  const totals = points.map((p) => p.total);
+  const min = Math.min(...totals), max = Math.max(...totals);
+  const span = Math.max(1, max - min);
+  const t0 = points[0]!.ts, t1 = points[points.length - 1]!.ts;
+  const tspan = Math.max(1, t1 - t0);
+  const path = points
+    .map((p, i) => `${i === 0 ? 'M' : 'L'}${(((p.ts - t0) / tspan) * W).toFixed(1)},${(H - 6 - ((p.total - min) / span) * (H - 12)).toFixed(1)}`)
+    .join(' ');
+  const cur = totals[totals.length - 1]!;
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: 'flex', opacity: 0.55, marginBottom: 2 }}>
+        <span style={{ color: '#4fd8ff', letterSpacing: 1 }}>WORLD TRAFFIC · 24H</span>
+        <span style={{ flex: 1 }} />
+        <span>{cur.toLocaleString()} now</span>
+      </div>
+      <svg width={W} height={H} style={{ display: 'block' }}>
+        <path d={path} fill="none" stroke="#4fd8ff" strokeWidth="1.2" opacity="0.85" />
+        <circle cx={W} cy={H - 6 - ((cur - min) / span) * (H - 12)} r="2.4" fill="#4fd8ff" />
+      </svg>
+      <div style={{ display: 'flex', opacity: 0.4, fontSize: 9 }}>
+        <span>low {min.toLocaleString()}</span>
+        <span style={{ flex: 1 }} />
+        <span>high {max.toLocaleString()}</span>
+      </div>
+    </div>
+  );
+}
+
 export function FeedPanel() {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<'signals' | 'briefing'>('signals');
   const [signals, setSignals] = useState<FeedSignal[]>([]);
   const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [cost, setCost] = useState<{ mtd_usd: number } | null>(null);
+  const [traffic, setTraffic] = useState<Array<{ ts: number; total: number }>>([]);
+  const [learning, setLearning] = useState<{ totalBins: number; mature: number; partial: number; warmup: number } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -65,13 +100,29 @@ export function FeedPanel() {
         .then((d) => alive && setCost(d.monthToDate))
         .catch(() => undefined);
     };
+    const loadStats = () => {
+      apiGet<{ points: Array<{ ts: number; total: number }> }>('/api/stats/traffic24h')
+        .then((d) => alive && setTraffic(d.points))
+        .catch(() => undefined);
+      apiGet<{ totalBins: number; mature: number; partial: number; warmup: number }>('/api/stats/learning')
+        .then((d) => alive && setLearning(d))
+        .catch(() => undefined);
+    };
     load();
+    loadStats();
     const id = setInterval(load, 60_000);
+    const sid = setInterval(loadStats, 5 * 60_000);
     return () => {
       alive = false;
       clearInterval(id);
+      clearInterval(sid);
     };
   }, []);
+
+  const flyTo = (lat: number, lng: number) => {
+    const g = (window as { __ORRERY__?: { globe?: { pointOfView(p: object, ms: number): void } } }).__ORRERY__?.globe;
+    if (g) g.pointOfView({ lat, lng, altitude: 0.8 }, 900);
+  };
 
   const dayAgo = Date.now() - 86_400_000;
   const badge = signals.filter(
@@ -118,6 +169,14 @@ export function FeedPanel() {
 
       {tab === 'signals' && (
         <div>
+          <Sparkline points={traffic} />
+          {learning && (
+            <div style={{ opacity: 0.55, marginBottom: 12 }}>
+              learning normal: {Math.round((learning.partial / Math.max(1, learning.totalBins)) * 100)}% partial ·{' '}
+              {Math.round((learning.mature / Math.max(1, learning.totalBins)) * 100)}% mature ·{' '}
+              {learning.totalBins.toLocaleString()} bins
+            </div>
+          )}
           {signals.length === 0 && <div style={{ opacity: 0.5 }}>No signals recorded.</div>}
           {signals.map((s) => (
             <div key={s.id} style={{ marginBottom: 12, opacity: s.severity === 'S3' ? 0.55 : 1 }}>
@@ -127,6 +186,15 @@ export function FeedPanel() {
                 <span style={{ opacity: 0.5 }}>
                   {' '}· {s.detector} · {new Date(s.ts).toISOString().slice(5, 16).replace('T', ' ')}Z
                 </span>
+                {s.where && typeof s.where.lat === 'number' && (
+                  <span
+                    onClick={() => flyTo(s.where.lat, s.where.lon)}
+                    style={{ cursor: 'pointer', color: '#4fd8ff', opacity: 0.8, marginLeft: 6 }}
+                    title="Point the globe here"
+                  >
+                    ⤓
+                  </span>
+                )}
               </div>
               <div>{s.what}</div>
               {s.assessment && (

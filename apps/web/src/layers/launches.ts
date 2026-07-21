@@ -229,6 +229,7 @@ export const launchesLayer: LayerDef = {
               { label: 'PAD', value: l.pad },
               { label: 'SITE', value: l.location },
             ],
+              fly: { lat: l.lat, lng: l.lon },
           }),
       };
     });

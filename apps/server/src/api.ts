@@ -335,6 +335,32 @@ export function registerApi(
       return reply.type(entry.contentType).send(entry.body);
     });
 
+    // ── instrument heartbeat: read-only stats for the sparkline + learning ──
+    scope.get('/api/stats/traffic24h', async () => {
+      const { rows } = await pool.query(
+        `SELECT extract(epoch from bucket_ts)::bigint * 1000 AS ts, total_aircraft AS total
+         FROM rollup_run WHERE bucket_ts >= now() - interval '24 hours' ORDER BY bucket_ts`,
+      );
+      return { points: rows.map((r) => ({ ts: Number(r.ts), total: r.total as number })) };
+    });
+
+    scope.get('/api/stats/learning', async () => {
+      const { rows } = await pool.query(
+        `SELECT daytype, days, count(*)::int AS n FROM baseline GROUP BY daytype, days`,
+      );
+      let mature = 0, partial = 0, warmup = 0, totalBins = 0, maxDays = 0;
+      for (const r of rows) {
+        const m = maturityOf(r.days as number, r.daytype as Daytype);
+        const n = r.n as number;
+        totalBins += n;
+        maxDays = Math.max(maxDays, r.days as number);
+        if (m === 'mature') mature += n;
+        else if (m === 'partial') partial += n;
+        else warmup += n;
+      }
+      return { totalBins, mature, partial, warmup, days: maxDays };
+    });
+
     scope.get('/api/analyst/usage', async () => {
       const { rows } = await pool.query(
         `SELECT coalesce(sum(est_cost_usd), 0)::float8 AS mtd_usd,

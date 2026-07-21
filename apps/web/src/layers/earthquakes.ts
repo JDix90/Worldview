@@ -197,6 +197,7 @@ export const earthquakesLayer: LayerDef = {
                 : []),
             ],
             href: qk.url,
+            fly: { lat: qk.lat, lng: qk.lon },
           }),
       };
     });

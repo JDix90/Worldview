@@ -25,6 +25,8 @@ export interface LayerCard {
   note?: string;
   rows: LayerCardRow[];
   href?: string;
+  /** When set, ObjectCard offers a ⤓ fly action that points the globe here. */
+  fly?: { lat: number; lng: number };
 }
 
 export interface PickCandidate {

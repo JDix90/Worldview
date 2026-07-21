@@ -264,6 +264,10 @@ Running log. Every non-obvious choice gets a line: what was decided, why, what w
 
 101. **The Pi's first page is now the household glance, not the instrument's.** Owner is mounting the appliance in the living room: page 1 (TODAY) leads with big-type local weather (temp/condition/feels, H/L, wind, sun times), banded AQI, and NWS alerts; feed/aircraft/S1 vitals demoted to SYSTEM; GPS jamming left the Pi entirely (browser only). Fetchers live in the display service itself (Open-Meteo forecast+AQI, NWS with UA header — keyless, 10-min cycle keyed off the summary's home coords); traffic deferred (COtrip needs a key — owner passed for now); zero FIRMS calls. **Wake semantics**: new pure `weather_status()` (Extreme/Severe or tornado/flash-flood/blizzard-class → red) combines with instrument status for the header dot AND the sleep policy — a Tornado Warning lights the sleeping screen at 3 AM. Carousel dwell weighted (TODAY ~2.5×). Selftest grew to 23 cases; verified live on the panel: 90° overcast, H103/L70, AQI 74, both real Denver alerts amber.
 
+## 2026-07-21 — Instrument heartbeat (brainstorm part 1 of 3)
+
+102. **The instrument now shows its own pulse.** Two read-only stats endpoints (`/api/stats/traffic24h` from rollup_run, `/api/stats/learning` from baseline maturity counts via shared `maturityOf`); the FEED panel leads with a 24 h world-traffic sparkline (SVG, 287 points verified against psql) + a learning line ("43% partial · 0% mature · 22,275 bins" — the honest march toward the Go/No-Go); the Pi SYSTEM page draws the same curve in PIL (two config-trivia rows dropped to make room). **Fly-to glue**: `LayerCard.fly` + ObjectCard `⤓ fly` + feed-row `⤓` (signal `where` coords) — populated in quakes/events/cyclones/fires/launches/vessels. Click-through spy-verified (real signal coords → camera). Zero rollup buckets lost in the server rebuild.
+
 ### Assumptions pending owner confirmation
 
 - OpenSky registered account + API client will be created by the owner; credentials into `.env`. **Blocks the collector chunk.**

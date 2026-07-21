@@ -41,15 +41,32 @@ export function ObjectCard({ card, onClose }: { card: LayerCard; onClose: () => 
           </div>
         ))}
       </div>
-      {card.href && (
-        <a
-          href={card.href}
-          target="_blank"
-          rel="noreferrer"
-          style={{ color: '#4fd8ff', opacity: 0.8, display: 'inline-block', marginTop: 6 }}
-        >
-          details ↗
-        </a>
+      {(card.href || card.fly) && (
+        <div style={{ marginTop: 6, display: 'flex', gap: 14 }}>
+          {card.href && (
+            <a
+              href={card.href}
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: '#4fd8ff', opacity: 0.8 }}
+            >
+              details ↗
+            </a>
+          )}
+          {card.fly && (
+            <span
+              onClick={() => {
+                const g = (window as { __ORRERY__?: { globe?: { pointOfView(p: object, ms: number): void } } })
+                  .__ORRERY__?.globe;
+                if (g) g.pointOfView({ ...card.fly, altitude: 0.8 }, 900);
+              }}
+              style={{ color: '#4fd8ff', opacity: 0.8, cursor: 'pointer' }}
+              title="Point the globe here"
+            >
+              ⤓ fly
+            </span>
+          )}
+        </div>
       )}
     </div>
   );

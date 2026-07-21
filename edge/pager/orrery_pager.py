@@ -587,8 +587,6 @@ def _page_system(d, s, sysinfo, summ, L: Layout) -> None:
         ("wifi", sysinfo.get("wifi", "—")),
         ("backend", "reachable" if (summ and summ.ok) else "unreachable"),
         ("last sync", f"{_ago(summ.stale_s)} ago" if summ else "—"),
-        ("poll", f"{POLL_SEC}s"),
-        ("clock", sysinfo.get("clock", "")),
     ]
     y = y0 + L.line_sm + 8
     label_w = round(L.w * 0.42)
@@ -596,6 +594,20 @@ def _page_system(d, s, sysinfo, summ, L: Layout) -> None:
         d.text((L.pad, y), k, font=L.sm, fill=DIM)
         d.text((L.pad + label_w, y), str(v), font=L.sm, fill=WHITE)
         y += L.line_sm + 8
+    # heartbeat sparkline: 24h global aircraft counts (when it fits)
+    traffic = sysinfo.get("traffic")
+    strip_h = 30
+    if traffic and len(traffic) > 2 and y + strip_h < L.h - L.footer_h - 4:
+        w = L.w - 2 * L.pad
+        lo, hi = min(traffic), max(traffic)
+        span = max(1, hi - lo)
+        pts = [
+            (L.pad + round(i * w / (len(traffic) - 1)),
+             y + strip_h - 4 - round((v - lo) / span * (strip_h - 8)))
+            for i, v in enumerate(traffic)
+        ]
+        d.text((L.pad, y - 2), "24h traffic", font=L.sm, fill=CYAN)
+        d.line(pts, fill=CYAN, width=1)
 
 
 # ─────────────────────────── hardware backends ───────────────────────────
@@ -877,6 +889,16 @@ class App:
             return
         self._cond_at = time.time()
         self.conditions = fetch_local_conditions(lat, lon)
+        try:  # heartbeat sparkline for the SYSTEM page (read-only stats)
+            r = requests.get(
+                f"{self.url}/api/stats/traffic24h",
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=8,
+            )
+            r.raise_for_status()
+            self.conditions["traffic"] = [p["total"] for p in r.json().get("points", [])]
+        except Exception:
+            pass
         self._dirty = True
 
     def _fetch_server_mode(self) -> None:
@@ -960,6 +982,8 @@ class App:
         power = getattr(self.backend, "power_label", lambda: None)()
         if power:
             info["power"] = power
+        if self.conditions and self.conditions.get("traffic"):
+            info["traffic"] = self.conditions["traffic"]
         return info
 
     def draw(self) -> None:

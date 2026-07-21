@@ -231,6 +231,7 @@ export const wildfiresLayer: LayerDef = {
               { label: 'SATELLITE', value: sat },
               { label: 'POSITION', value: latLon(f.lat, f.lon) },
             ],
+              fly: { lat: f.lat, lng: f.lon },
           }),
       };
     });

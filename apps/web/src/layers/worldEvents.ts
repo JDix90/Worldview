@@ -236,6 +236,7 @@ export const worldEventsLayer: LayerDef = {
               { label: 'POSITION', value: latLon(ev.lat, ev.lon) },
             ],
             href: ev.url,
+            fly: { lat: ev.lat, lng: ev.lon },
           }),
       };
     });

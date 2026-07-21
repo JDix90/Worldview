@@ -229,6 +229,7 @@ export const cyclonesLayer: LayerDef = {
                 ? [{ label: 'ADVISORY', value: advisoryAge(s.lastUpdate) }]
                 : []),
             ],
+            fly: { lat: s.lat, lng: s.lon },
           }),
       };
     });
