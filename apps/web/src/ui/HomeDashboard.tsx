@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { apiGet } from '../feed/api';
+import { fetchRoute } from '../feed/routes';
 
 const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 
@@ -59,6 +60,35 @@ const WMO: Record<number, string> = {
 function compassFromDeg(deg: number): string {
   const pts = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
   return pts[Math.round(deg / 22.5) % 16]!;
+}
+
+const DEG = Math.PI / 180;
+function haversineMi(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const dLat = (lat2 - lat1) * DEG;
+  const dLon = (lon2 - lon1) * DEG;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * DEG) * Math.cos(lat2 * DEG) * Math.sin(dLon / 2) ** 2;
+  return 3958.8 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+function bearingCompass(lat1: number, lon1: number, lat2: number, lon2: number): string {
+  const dLon = (lon2 - lon1) * DEG;
+  const y = Math.sin(dLon) * Math.cos(lat2 * DEG);
+  const x = Math.cos(lat1 * DEG) * Math.sin(lat2 * DEG) - Math.sin(lat1 * DEG) * Math.cos(lat2 * DEG) * Math.cos(dLon);
+  return compassFromDeg(((Math.atan2(y, x) * 180) / Math.PI + 360) % 360);
+}
+
+/** US AQI band → [word, color]. */
+function aqiBand(aqi: number): [string, string] {
+  if (aqi <= 50) return ['good', GREEN];
+  if (aqi <= 100) return ['moderate', AMBER];
+  if (aqi <= 150) return ['unhealthy for sensitive', '#ff9d4d'];
+  if (aqi <= 200) return ['unhealthy', RED];
+  return ['very unhealthy', '#c86bff'];
+}
+
+interface Conditions {
+  aqi: { us: number; pm25: number } | null;
+  alerts: Array<{ event: string; severity: string; until: string }>;
+  fires: { count: number; nearestMi: number; nearestDir: string } | 'none' | 'unavailable' | null;
 }
 
 interface Summary {
@@ -115,6 +145,8 @@ export function HomeDashboard() {
   const [sum, setSum] = useState<Summary | null>(null);
   const [label, setLabel] = useState<string>('');
   const [wx, setWx] = useState<Weather | null>(null);
+  const [routes, setRoutes] = useState<Record<string, string>>({});
+  const [cond, setCond] = useState<Conditions>({ aqi: null, alerts: [], fires: null });
   const sumTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const wxTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
@@ -166,6 +198,83 @@ export function HomeDashboard() {
     wxTimer.current = setInterval(load, 10 * 60_000);
   }, [open, homeKey]);
 
+  // origin→destination for the overhead tops (adsbdb, cache-hot via routes.ts)
+  const topKey = (sum?.overhead?.tops ?? []).map((t) => t.callsign ?? '').join(',');
+  useEffect(() => {
+    if (!open) return;
+    for (const t of sum?.overhead?.tops ?? []) {
+      const cs = t.callsign?.trim();
+      if (!cs || routes[cs] !== undefined) continue;
+      void fetchRoute(cs).then((r) => {
+        setRoutes((prev) => ({ ...prev, [cs]: r ? `${r.origin.city} → ${r.destination.city}` : '' }));
+      });
+    }
+  }, [open, topKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // local conditions: AQI + NWS alerts + FIRMS fires near home
+  const condTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  useEffect(() => {
+    if (!open || !sum?.home) return;
+    const { lat, lon } = sum.home;
+    const load = async () => {
+      const next: Conditions = { aqi: null, alerts: [], fires: null };
+      // air quality
+      try {
+        const d = (await (
+          await fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&current=us_aqi,pm2_5`)
+        ).json()) as { current?: { us_aqi: number; pm2_5: number } };
+        if (d.current) next.aqi = { us: Math.round(d.current.us_aqi), pm25: Math.round(d.current.pm2_5 * 10) / 10 };
+      } catch { /* absent */ }
+      // NWS active alerts (US only — 404s gracefully abroad)
+      try {
+        const r = await fetch(`https://api.weather.gov/alerts/active?point=${lat},${lon}`);
+        if (r.ok) {
+          const d = (await r.json()) as { features?: Array<{ properties?: { event?: string; severity?: string; ends?: string; expires?: string } }> };
+          next.alerts = (d.features ?? []).slice(0, 2).map((f) => {
+            const p = f.properties ?? {};
+            const end = p.ends || p.expires || '';
+            return { event: p.event ?? 'Alert', severity: p.severity ?? '', until: end ? end.slice(11, 16) : '' };
+          });
+        }
+      } catch { /* absent */ }
+      // FIRMS fire detections within ~150 mi (best-effort; key may be rejected upstream)
+      try {
+        const bbox = `${(lon - 2.8).toFixed(2)},${(lat - 2.2).toFixed(2)},${(lon + 2.8).toFixed(2)},${(lat + 2.2).toFixed(2)}`;
+        const res = await fetch(`https://firms.modaps.eosdis.nasa.gov/api/area/csv/${__FIRMS_KEY__}/VIIRS_NOAA20_NRT/${bbox}/1`);
+        const text = await res.text();
+        if (!res.ok || !text.toLowerCase().includes('latitude')) {
+          next.fires = 'unavailable';
+        } else {
+          const lines = text.trim().split('\n');
+          const header = lines[0]!.split(',');
+          const li = header.indexOf('latitude');
+          const oi = header.indexOf('longitude');
+          let count = 0;
+          let nearest = Infinity;
+          let nearestDir = '';
+          for (const ln of lines.slice(1)) {
+            const c = ln.split(',');
+            const flat = Number(c[li]);
+            const flon = Number(c[oi]);
+            if (!Number.isFinite(flat) || !Number.isFinite(flon)) continue;
+            const d = haversineMi(lat, lon, flat, flon);
+            if (d > 150) continue;
+            count++;
+            if (d < nearest) { nearest = d; nearestDir = bearingCompass(lat, lon, flat, flon); }
+          }
+          next.fires = count === 0 ? 'none' : { count, nearestMi: Math.round(nearest), nearestDir };
+        }
+      } catch {
+        next.fires = 'unavailable';
+      }
+      setCond(next);
+    };
+    void load();
+    clearInterval(condTimer.current);
+    condTimer.current = setInterval(() => void load(), 10 * 60_000);
+    return () => clearInterval(condTimer.current);
+  }, [open, homeKey]);
+
   const flyHome = () => {
     const g = (window as { __ORRERY__?: { globe?: { pointOfView(p: object, ms: number): void } } }).__ORRERY__?.globe;
     if (g && sum?.home) g.pointOfView({ lat: sum.home.lat, lng: sum.home.lon, altitude: 1.0 }, 900);
@@ -183,7 +292,6 @@ export function HomeDashboard() {
   const dot = { red: RED, amber: AMBER, green: GREEN }[st];
   const near = (sum?.signals ?? []).filter((x) => x.distMi != null && x.distMi < 500);
   const far = (sum?.signals ?? []).length - near.length;
-  const exceptions = (sum?.integrity ?? []).filter((r) => r.verdict === 'elevated' || r.verdict === 'severe');
 
   return (
     <div style={panelStyle}>
@@ -224,15 +332,22 @@ export function HomeDashboard() {
         {sum?.overhead ? (
           <>
             <div>{sum.overhead.count} aircraft within 150 mi</div>
-            {sum.overhead.tops.map((t, i) => (
-              <div key={i} style={{ display: 'flex', gap: 8, opacity: 0.9 }}>
-                <span style={{ color: t.mil ? AMBER : 'inherit', minWidth: 70 }}>{t.callsign?.trim() || '—'}</span>
-                <span style={{ opacity: 0.6 }}>
-                  {t.altFt ? `${t.altFt.toLocaleString()} ft · ` : ''}{t.distMi}mi {t.bearing}
-                  {t.typeDesc ? ` · ${t.typeDesc}` : ''}
-                </span>
-              </div>
-            ))}
+            {sum.overhead.tops.map((t, i) => {
+              const cs = t.callsign?.trim();
+              const route = cs ? routes[cs] : undefined;
+              return (
+                <div key={i} style={{ marginTop: 2 }}>
+                  <div style={{ display: 'flex', gap: 8, opacity: 0.9 }}>
+                    <span style={{ color: t.mil ? AMBER : 'inherit', minWidth: 70 }}>{cs || '—'}</span>
+                    <span style={{ opacity: 0.6 }}>
+                      {t.altFt ? `${t.altFt.toLocaleString()} ft · ` : ''}{t.distMi}mi {t.bearing}
+                      {t.typeDesc ? ` · ${t.typeDesc}` : ''}
+                    </span>
+                  </div>
+                  {route ? <div style={{ opacity: 0.5, paddingLeft: 78 }}>{route}</div> : null}
+                </div>
+              );
+            })}
           </>
         ) : (
           <div style={{ opacity: 0.5 }}>loading…</div>
@@ -270,18 +385,41 @@ export function HomeDashboard() {
         )}
       </Section>
 
-      <Section title="GPS WATCH">
-        {exceptions.length === 0 ? (
-          <div style={{ color: GREEN, opacity: 0.85 }}>all regions nominal</div>
+      <Section title="LOCAL CONDITIONS">
+        {/* air quality */}
+        {cond.aqi ? (
+          (() => {
+            const [word, color] = aqiBand(cond.aqi.us);
+            return (
+              <div>
+                AQI <span style={{ color }}>{cond.aqi.us} — {word}</span>
+                <span style={{ opacity: 0.55 }}> · PM2.5 {cond.aqi.pm25} µg/m³</span>
+              </div>
+            );
+          })()
         ) : (
-          exceptions.map((r, i) => (
-            <div key={i}>
-              {r.name}:{' '}
-              <span style={{ color: r.verdict === 'severe' ? RED : AMBER }}>
-                {r.verdict.toUpperCase()}{r.pct != null ? ` ${r.pct}%` : ''}
-              </span>
+          <div style={{ opacity: 0.5 }}>air quality loading…</div>
+        )}
+        {/* NWS alerts */}
+        {cond.alerts.map((a, i) => {
+          const sev = a.severity.toLowerCase();
+          const col = sev === 'extreme' || sev === 'severe' ? RED : AMBER;
+          return (
+            <div key={i} style={{ color: col }}>
+              ⚠ {a.event}{a.until ? <span style={{ opacity: 0.7 }}> · until {a.until}</span> : null}
             </div>
-          ))
+          );
+        })}
+        {/* FIRMS fire detections */}
+        {cond.fires === null ? null : cond.fires === 'unavailable' ? (
+          <div style={{ opacity: 0.45 }}>fire data unavailable</div>
+        ) : cond.fires === 'none' ? (
+          <div style={{ color: GREEN, opacity: 0.8 }}>no fire detections nearby (24 h)</div>
+        ) : (
+          <div style={{ color: '#ff9d4d' }}>
+            🔥 {cond.fires.count} fire detection{cond.fires.count === 1 ? '' : 's'} within 150 mi
+            <span style={{ opacity: 0.7 }}> · nearest {cond.fires.nearestMi}mi {cond.fires.nearestDir}</span>
+          </div>
         )}
       </Section>
 
