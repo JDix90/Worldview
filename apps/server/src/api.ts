@@ -528,7 +528,13 @@ export function registerApi(
            FROM shadow_push WHERE ts >= now() - $2::interval GROUP BY 1`,
           [tz, since],
         ),
-        pool.query(`SELECT (now() AT TIME ZONE $1)::date::text AS d`, [tz]),
+        pool.query(
+          `SELECT (now() AT TIME ZONE $1)::date::text AS d,
+                  extract(epoch from ((now() AT TIME ZONE $1)
+                    - date_trunc('day', now() AT TIME ZONE $1)))::int AS secs,
+                  (SELECT min(date_local)::text FROM briefing) AS first_briefing`,
+          [tz],
+        ),
       ]);
 
       const by = <T extends { d: string }>(rows: T[]) => new Map(rows.map((r) => [r.d, r]));
@@ -544,16 +550,22 @@ export function registerApi(
       // Scaffold every day in the window so a missing briefing is a visible
       // hole rather than an absent row.
       const todayStr = today.rows[0].d as string;
+      // Today is partial: measuring it against a full 288 would report a
+      // healthy morning as catastrophic coverage.
+      const elapsedToday = Math.max(1, Math.floor((today.rows[0].secs as number) / 300));
+      const firstBriefing = (today.rows[0].first_briefing as string | null) ?? todayStr;
       const out: Array<Record<string, unknown>> = [];
       for (let i = 0; i < days; i++) {
         const dt = new Date(`${todayStr}T00:00:00Z`);
         dt.setUTCDate(dt.getUTCDate() - i);
         const d = dt.toISOString().slice(0, 10);
         const br = brMap.get(d) as { quiet: boolean; chars: number; filed_hour: number } | undefined;
+        const expected = i === 0 ? elapsedToday : 288;
         out.push({
           date: d,
+          partial: i === 0,
           buckets: (bMap.get(d)?.n as number) ?? 0,
-          coveragePct: Math.round((((bMap.get(d)?.n as number) ?? 0) / 288) * 100),
+          coveragePct: Math.min(100, Math.round((((bMap.get(d)?.n as number) ?? 0) / expected) * 100)),
           signals: sevMap.get(d) ?? { S1: 0, S2: 0, S3: 0 },
           dataHealth: (hMap.get(d)?.n as number) ?? 0,
           briefing: br
@@ -567,8 +579,13 @@ export function registerApi(
       // Current streak counts back from today; a day that hasn't reached the
       // briefing hour yet doesn't break it.
       const filed = new Set(briefs.rows.map((r) => r.d as string));
-      // Today is excluded: a day still in progress isn't a gap, it's pending.
-      const gaps = out.slice(1).filter((r) => !filed.has(r.date as string)).map((r) => r.date as string);
+      // A gap only counts once the instrument was actually filing: days before
+      // the first briefing ever written are pre-history, not misses. Today is
+      // excluded too — a day still in progress is pending, not missed.
+      const gaps = out
+        .slice(1)
+        .filter((r) => !filed.has(r.date as string) && (r.date as string) >= firstBriefing)
+        .map((r) => r.date as string);
       let current = 0;
       for (let i = 0; i < out.length; i++) {
         const d = out[i]!.date as string;
@@ -583,6 +600,9 @@ export function registerApi(
       }
       return {
         timezone: tz, expectedBucketsPerDay: 288, windowDays: days,
+        // Days before this are pre-history, not misses — the UI must not paint
+        // them red or the page overstates the failure it exists to measure.
+        firstBriefing,
         days: out, streak: { current, longest, gaps },
       };
     });

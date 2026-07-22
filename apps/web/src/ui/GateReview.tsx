@@ -32,6 +32,8 @@ interface GateDay {
 interface GateStats {
   timezone: string;
   windowDays: number;
+  /** Earliest briefing ever filed — days before it are pre-history. */
+  firstBriefing: string | null;
   days: GateDay[];
   streak: { current: number; longest: number; gaps: string[] };
 }
@@ -166,7 +168,9 @@ export function GateReview({ onClose }: { onClose: () => void }) {
                       <span style={{ opacity: 0.45 }}>{d.signals.S3}·S3</span>
                     </span>
                     <span style={{ width: 120, fontSize: 10 }}>
-                      {!d.briefing.filed ? (
+                      {!d.briefing.filed && stats.firstBriefing && d.date < stats.firstBriefing ? (
+                        <span style={{ opacity: 0.3 }}>— not yet filing</span>
+                      ) : !d.briefing.filed ? (
                         <span style={{ color: RED }}>✗ missing</span>
                       ) : d.briefing.filedHour !== undefined && d.briefing.filedHour > 8 ? (
                         <span style={{ color: AMBER }}>⚠ late {String(d.briefing.filedHour).padStart(2, '0')}:00</span>
