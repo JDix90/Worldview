@@ -51,7 +51,7 @@ export function OverheadRadar({ blips, homeLabel }: { blips: RadarBlip[]; homeLa
     const m = Math.hypot(e, n) || 1;
     return { x: (e / m) * k * R, y: -(n / m) * k * R };
   };
-  const fmtMi = (mi: number) => (mi >= 10 ? Math.round(mi) : Math.round(mi * 10) / 10);
+  const fmtMi = (mi: number) => Math.round(mi); // integer ring labels read cleaner than 8.3
 
   return (
     <svg width={S * 2} height={S * 2} viewBox={`${-S} ${-S} ${S * 2} ${S * 2}`} style={{ display: 'block' }}>
