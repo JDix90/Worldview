@@ -144,8 +144,14 @@ const Section = ({ title, right, children }: { title: string; right?: React.Reac
   </div>
 );
 
-export function HomeDashboard() {
-  const [open, setOpen] = useState(false);
+interface HomeDashboardProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Chip hides while another right-dock panel is open (one surface at a time). */
+  chipVisible: boolean;
+}
+
+export function HomeDashboard({ open, onOpenChange, chipVisible }: HomeDashboardProps) {
   const [sum, setSum] = useState<Summary | null>(null);
   const [label, setLabel] = useState<string>('');
   const [wx, setWx] = useState<Weather | null>(null);
@@ -312,8 +318,9 @@ export function HomeDashboard() {
   };
 
   if (!open) {
+    if (!chipVisible) return null;
     return (
-      <div style={chipStyle} onClick={() => setOpen(true)} title="What's happening around your home location">
+      <div style={chipStyle} onClick={() => onOpenChange(true)} title="What's happening around your home location">
         HOME <span style={{ color: CYAN }}>▣</span>
       </div>
     );
@@ -334,7 +341,7 @@ export function HomeDashboard() {
         <span onClick={flyHome} style={{ cursor: 'pointer', color: CYAN, opacity: 0.85 }} title="Point the globe at home">
           ⤓ fly
         </span>
-        <span onClick={() => setOpen(false)} style={{ cursor: 'pointer', opacity: 0.6, marginLeft: 8 }}>✕</span>
+        <span onClick={() => onOpenChange(false)} style={{ cursor: 'pointer', opacity: 0.6, marginLeft: 8 }}>✕</span>
       </div>
 
       {sum?.feed && (

@@ -91,6 +91,8 @@ try {
         disposition: 'explained', confidence: 0.7,
         sources: ['https://example.com/aviation-news'],
       }],
+      s2Count: 1,
+      s2ByDetector: { traffic_collapse: 1 },
       s3Count: 11,
       s3Sample: ['UAL233 squawking 7700 (general emergency).', 'Degraded nav integrity 22% over Persian Gulf watch region.'],
     },

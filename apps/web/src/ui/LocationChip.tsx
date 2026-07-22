@@ -127,8 +127,14 @@ async function geocode(q: string): Promise<GeoHit | null> {
   return { lat: r.latitude, lon: r.longitude, label: region ? `${r.name}, ${region}` : r.name };
 }
 
-export function LocationChip() {
-  const [open, setOpen] = useState(false);
+interface LocationChipProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Chip hides while a right-dock panel is open (one surface at a time). */
+  chipVisible: boolean;
+}
+
+export function LocationChip({ open, onOpenChange, chipVisible }: LocationChipProps) {
   const [current, setCurrent] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [err, setErr] = useState(false);
@@ -149,7 +155,7 @@ export function LocationChip() {
 
   const setHome = async (lat: number, lon: number, label: string) => {
     await apiPost('/api/settings/home', { lat, lon });
-    setOpen(false);
+    onOpenChange(false);
     setFlash(`✓ ${label}`.slice(0, 22));
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setFlash(null), 3000);
@@ -180,6 +186,8 @@ export function LocationChip() {
     }
   };
 
+  if (!open && !chipVisible) return null;
+
   return (
     <>
       {open && (
@@ -190,7 +198,7 @@ export function LocationChip() {
             placeholder="city or US zip"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !busy) void submit();
-              if (e.key === 'Escape') setOpen(false);
+              if (e.key === 'Escape') onOpenChange(false);
             }}
           />
           <div style={{ opacity: 0.55, marginTop: 4, fontSize: 10 }}>
@@ -206,7 +214,7 @@ export function LocationChip() {
       )}
       <div
         style={{ ...chip, color: flash ? '#6be36b' : (chip.color as string) }}
-        onClick={() => (flash ? null : setOpen((o) => !o))}
+        onClick={() => (flash ? null : onOpenChange(!open))}
         title="Set the home location (city/zip, or empty = globe center) — anchors the appliance display and the HOME dashboard"
       >
         {flash ?? (

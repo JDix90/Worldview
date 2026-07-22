@@ -3,7 +3,11 @@ dist/
 .env
 .env.*
 !.env.example
-data/
+# root raw-JSONL store only — unanchored `data/` also swallowed
+# apps/*/src/data/ source files (cities.ts, airlines.ts were untracked for
+# days; found by the 2026-07-22 fresh-eyes review when a clean worktree
+# failed to typecheck)
+/data/
 *.log
 .DS_Store
 __pycache__/

@@ -16,6 +16,7 @@ async function send(title: string, message: string, priority: 3 | 4): Promise<bo
       method: 'POST',
       headers: { Title: title, Priority: String(priority) },
       body: message,
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) throw new Error(`ntfy HTTP ${res.status}`);
     return true;

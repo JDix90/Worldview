@@ -27,7 +27,11 @@ export const env = {
   triageModel: process.env.ANALYST_TRIAGE_MODEL ?? 'claude-haiku-4-5-20251001',
   briefingModel: process.env.ANALYST_BRIEFING_MODEL ?? 'claude-sonnet-5',
   monthlySpendCapUsd: Number(process.env.ANALYST_MONTHLY_SPEND_CAP_USD ?? 10),
-  webSearchesPerDay: Number(process.env.ANALYST_WEB_SEARCHES_PER_DAY ?? 10),
+  /** Defaults retuned 2026-07-22 (DECISIONS #109): live spend was tracking
+   *  ~$16/mo vs the §8 target of $2–4. Searches 10→4 and a 10/day S2 triage
+   *  budget bring the projection back inside the target. */
+  webSearchesPerDay: Number(process.env.ANALYST_WEB_SEARCHES_PER_DAY ?? 4),
+  triagePerDay: Number(process.env.ANALYST_TRIAGE_PER_DAY ?? 10),
   briefingHourLocal: Number(process.env.BRIEFING_HOUR_LOCAL ?? 7),
   briefingTimezone: process.env.BRIEFING_TIMEZONE ?? 'America/Denver',
   /** Anomaly push. Ships false — the FOUNDATION §4 calibration gate. */

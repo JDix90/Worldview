@@ -48,7 +48,7 @@ interface WorkerVessel {
 export const vesselsLayer: LayerDef = {
   id: 'ships',
   label: 'VESSELS',
-  defaultOn: true,
+  defaultOn: false,
   attribution: 'aisstream.io',
   init(ctx: LayerCtx): LayerInstance {
     if (!__AISSTREAM_KEY__) {

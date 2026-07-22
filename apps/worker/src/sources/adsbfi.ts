@@ -99,6 +99,7 @@ async function get(pathname: string): Promise<AdsbfiResult> {
   return rateLimited(async () => {
     const res = await fetch(`${env.adsbfiBaseUrl}${pathname}`, {
       headers: { 'user-agent': 'ORRERY (personal, non-commercial; single instance)' },
+      signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) throw new Error(`adsb.fi ${pathname}: HTTP ${res.status}`);
     const data = (await res.json()) as AdsbfiResponse;

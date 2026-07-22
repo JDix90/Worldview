@@ -30,6 +30,11 @@ export interface BriefingInput {
   signals: {
     s1: unknown[];
     s2: unknown[];
+    /** Total S2s in the window; s2 above carries only the S2_DETAIL_CAP most
+     *  recent in full (DECISIONS #109 — a 40-signal day was inflating the
+     *  Sonnet input ~10× and the briefing cost with it). */
+    s2Count: number;
+    s2ByDetector: Record<string, number>;
     s3Count: number;
     s3Sample: string[];
   };
@@ -37,8 +42,11 @@ export interface BriefingInput {
   shadowWeek?: unknown[];
 }
 
+/** Full-detail S2 rows in the briefing input; the rest arrive as counts. */
+const S2_DETAIL_CAP = 15;
+
 export async function assembleBriefingInput(db: Queryable): Promise<BriefingInput> {
-  const [rollupDays, bins, buckets, incidents, s1, s2, s3] = await Promise.all([
+  const [rollupDays, bins, buckets, incidents, s1, s2, s2Counts, s3] = await Promise.all([
     db.query(`SELECT count(DISTINCT (bucket_ts AT TIME ZONE 'UTC')::date)::int AS d FROM rollup_run`),
     db.query(`SELECT
         count(*) FILTER (WHERE days >= CASE WHEN daytype='weekend' THEN 6 ELSE 15 END)::int AS mature,
@@ -53,7 +61,10 @@ export async function assembleBriefingInput(db: Queryable): Promise<BriefingInpu
               WHERE s.severity = 'S1' AND s.ts >= now() - interval '24 hours' ORDER BY s.ts`),
     db.query(`SELECT s.payload, a.narrative, a.disposition, a.sources, a.confidence
               FROM signal s LEFT JOIN assessment a ON a.signal_id = s.id
-              WHERE s.severity = 'S2' AND s.ts >= now() - interval '24 hours' ORDER BY s.ts`),
+              WHERE s.severity = 'S2' AND s.ts >= now() - interval '24 hours'
+              ORDER BY s.ts DESC LIMIT ${S2_DETAIL_CAP}`),
+    db.query(`SELECT detector, count(*)::int AS n FROM signal
+              WHERE severity = 'S2' AND ts >= now() - interval '24 hours' GROUP BY detector`),
     db.query(`SELECT count(*)::int AS n,
                      (array_agg(payload->>'what' ORDER BY ts DESC))[1:10] AS sample
               FROM signal WHERE severity = 'S3' AND detector != 'data_health'
@@ -79,6 +90,8 @@ export async function assembleBriefingInput(db: Queryable): Promise<BriefingInpu
     signals: {
       s1: s1.rows,
       s2: s2.rows,
+      s2Count: s2Counts.rows.reduce((sum, r) => sum + r.n, 0),
+      s2ByDetector: Object.fromEntries(s2Counts.rows.map((r) => [r.detector, r.n])),
       s3Count: s3.rows[0]?.n ?? 0,
       s3Sample: s3.rows[0]?.sample ?? [],
     },
@@ -97,7 +110,7 @@ export function buildBriefingPrompt(input: BriefingInput): string {
   const shadowNote = input.shadowWeek
     ? `\nIt is Sunday: the input includes shadowWeek — every signal that WOULD have pushed this week (push is still in shadow mode). Add a short "shadow log review" section: for each entry, one line on whether being interrupted for it would have been worth it. If the list is empty, one dry sentence acknowledging a quiet week for the pager that does not exist yet.`
     : '';
-  return `Write today's briefing from this structured summary. The instrument watches global flight data only.${shadowNote}\n\n\`\`\`json\n${JSON.stringify(input, null, 2)}\n\`\`\``;
+  return `Write today's briefing from this structured summary. The instrument watches global flight data only. signals.s2 carries only the most recent entries in full detail; signals.s2Count and s2ByDetector are the complete 24h totals — trust the counts for volume.${shadowNote}\n\n\`\`\`json\n${JSON.stringify(input, null, 2)}\n\`\`\``;
 }
 
 const BREAKER_BODY =
@@ -121,7 +134,7 @@ export async function generateBriefing(
   let body: string;
   const quiet =
     input.signals.s1.length === 0 &&
-    input.signals.s2.length === 0 &&
+    input.signals.s2Count === 0 &&
     input.dataHealth.coverageIncidents.length === 0;
 
   if (await client.breakerTripped()) {

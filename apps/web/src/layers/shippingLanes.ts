@@ -50,7 +50,7 @@ const fragmentShader = /* glsl */ `
 export const shippingLanesLayer: LayerDef = {
   id: 'lanes',
   label: 'SHIPPING LANES',
-  defaultOn: true,
+  defaultOn: false,
   attribution: 'World Bank/IMF AIS density',
   init(ctx: LayerCtx): LayerInstance {
     const material = new THREE.ShaderMaterial({
@@ -69,11 +69,16 @@ export const shippingLanesLayer: LayerDef = {
     mesh.visible = false;
     ctx.scene.add(mesh);
 
-    void new THREE.TextureLoader().loadAsync('/textures/ship-density-8k.png').then((tex) => {
-      tex.anisotropy = 8;
-      material.uniforms.densityMap!.value = tex;
-      mesh.visible = true;
-    });
+    new THREE.TextureLoader()
+      .loadAsync('/textures/ship-density-8k.png')
+      .then((tex) => {
+        tex.anisotropy = 8;
+        material.uniforms.densityMap!.value = tex;
+        mesh.visible = true;
+      })
+      // vendored asset, but a 404/network error must degrade like every
+      // other layer (warn + invisible), not surface an unhandled rejection
+      .catch((err) => console.warn('[lanes] density texture failed to load', err));
 
     return {
       dispose() {

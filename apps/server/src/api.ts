@@ -6,6 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
 import type { Redis } from 'ioredis';
 import {
+  EMERGENCY_SQUAWKS,
   GPS_WATCH_REGIONS,
   REDIS_KEYS,
   daytypeOf,
@@ -19,7 +20,8 @@ import { nearestCity, distMiles, compass16 } from './data/cities.js';
 import { routeLabel } from './routes.js';
 
 const CELL_RE = /^[NS]\d{2}[EW]\d{3}$/;
-const EMERGENCY_SQUAWKS = new Set(['7500', '7600', '7700']);
+// Set view of the shared constant (single source of truth in redisKeys.ts).
+const EMERGENCY_SQUAWK_SET = new Set<string>(EMERGENCY_SQUAWKS);
 const OVERHEAD_RADIUS_MI = 150;
 
 const BRIEF_HEADER_RE = /^(morning brief|night watch|orrery\b|.*24h window)/i;
@@ -236,7 +238,7 @@ export function registerApi(
                   callsign: ac.callsign ?? null,
                   altFt: ac.altBaroM != null ? Math.round(ac.altBaroM * 3.28084) : null,
                   live: true,
-                  stillSquawking: !!ac.squawk && EMERGENCY_SQUAWKS.has(ac.squawk),
+                  stillSquawking: !!ac.squawk && EMERGENCY_SQUAWK_SET.has(ac.squawk),
                 }
               : hex
                 ? { callsign: null, altFt: null, live: false, stillSquawking: false }
@@ -349,7 +351,12 @@ export function registerApi(
       const hit = proxyCache.get(key);
       if (hit && Date.now() - hit.at < ttlMs) return hit;
       try {
-        const res = await fetch(url, { headers: { 'user-agent': 'ORRERY (personal, non-commercial)' } });
+        // Timeout so a hung upstream degrades to stale-serve instead of
+        // hanging the caller — /api/pager/summary awaits the FAA proxy.
+        const res = await fetch(url, {
+          headers: { 'user-agent': 'ORRERY (personal, non-commercial)' },
+          signal: AbortSignal.timeout(8_000),
+        });
         if (!res.ok) throw new Error(`${key} upstream HTTP ${res.status}`);
         const body = contentType === 'application/json' ? await res.json() : await res.text();
         const entry = { at: Date.now(), body, contentType };

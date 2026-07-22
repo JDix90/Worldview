@@ -58,7 +58,7 @@ const fragmentShader = /* glsl */ `
 export const currentsLayer: LayerDef = {
   id: 'currents',
   label: 'OCEAN CURRENTS',
-  defaultOn: true,
+  defaultOn: false,
   attribution: 'Open-Meteo Marine',
   init(ctx: LayerCtx): LayerInstance {
     const lat = new Float32Array(N);

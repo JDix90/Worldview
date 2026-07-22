@@ -4,6 +4,7 @@
  */
 import { useEffect, useState } from 'react';
 import { subsolarPoint } from '../globe/solar';
+import { DEBUG_UI } from '../prefs';
 import type { AircraftStore } from '../feed/aircraftStore';
 import type { FeedStatus } from '../feed/useAircraftFeed';
 
@@ -31,7 +32,10 @@ export function Hud({ store, feedStatus }: { store: AircraftStore; feedStatus: F
     return () => clearInterval(id);
   }, []);
 
+  // FPS is builder telemetry, not viewer information — a backgrounded tab
+  // legitimately reads 0 and looks broken. ?debug=1 only.
   useEffect(() => {
+    if (!DEBUG_UI) return;
     let frames = 0;
     let last = performance.now();
     let raf = 0;

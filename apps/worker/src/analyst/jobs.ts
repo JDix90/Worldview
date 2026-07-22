@@ -13,10 +13,13 @@ import { log, logError } from '../log.js';
 import { AnalystClient } from './client.js';
 import { buildTriagePrompt, parseAssessment, webSearchTool, TRIAGE_SYSTEM } from './triage.js';
 import { generateBriefing } from './briefing.js';
+import { decideTriage, TRIAGE_COOLDOWN_S } from './triagePolicy.js';
 import { pushAnomaly, pushOps } from './notify.js';
 
 const CURSOR_KEY = 'analyst:stream:cursor';
 const SEARCH_BUDGET_KEY = (day: string) => `analyst:websearch:${day}`;
+const TRIAGE_BUDGET_KEY = (day: string) => `analyst:triage:${day}`;
+const TRIAGE_COOLDOWN_KEY = (dedupe: string) => `analyst:triaged:${dedupe}`;
 
 async function remainingSearchBudget(redis: Redis): Promise<number> {
   const day = new Date().toISOString().slice(0, 10);
@@ -30,6 +33,19 @@ async function consumeSearchBudget(redis: Redis, n: number): Promise<void> {
   const key = SEARCH_BUDGET_KEY(day);
   await redis.incrby(key, n);
   await redis.expire(key, 2 * 86400);
+}
+
+/** Untriaged S1s MUST reach the shadow log (FOUNDATION §4) — whether the
+ *  analyst is unconfigured OR a call failed mid-flight. One shared writer. */
+async function shadowLogUntriaged(db: Queryable, signal: Signal, why: string): Promise<void> {
+  const wouldSend = `ORRERY S1 — ${signal.detector}\n${signal.what}\n(untriaged: ${why})`;
+  await db.query(
+    `INSERT INTO shadow_push (id, ts, signal_id, signal, assessment, would_send, pushed)
+     VALUES ($1, now(), $2, $3, NULL, $4, false)
+     ON CONFLICT DO NOTHING`,
+    [ulid(), signal.id, JSON.stringify(signal), wouldSend],
+  );
+  log('analyst', 'S1 → shadow log (untriaged)', { signal: signal.id, why });
 }
 
 export async function triageSignal(
@@ -79,34 +95,54 @@ export async function jobAnalystPoll(redis: Redis, db: Queryable): Promise<void>
             log('analyst', 'no API key — signal recorded, triage skipped', { signal: signal.id });
             // no analyst means no downgrade: an S1 stands and MUST reach the
             // shadow log, or the calibration review has a blind spot
-            if (signal.severity === 'S1') {
-              const wouldSend = `ORRERY S1 — ${signal.detector}\n${signal.what}\n(untriaged: analyst unavailable)`;
-              await db.query(
-                `INSERT INTO shadow_push (id, ts, signal_id, signal, assessment, would_send, pushed)
-                 VALUES ($1, now(), $2, $3, NULL, $4, false)`,
-                [ulid(), signal.id, JSON.stringify(signal), wouldSend],
-              );
-              log('analyst', 'S1 → shadow log (untriaged)', { signal: signal.id });
-            }
+            if (signal.severity === 'S1') await shadowLogUntriaged(db, signal, 'analyst unavailable');
           } else {
-            const assessment = await triageSignal(db, redis, client, signal);
-            // S1 that survives triage → shadow log (and push, iff the gate is open)
-            if (signal.severity === 'S1' && assessment && assessment.severity_final === 'S1') {
-              const title = `ORRERY S1 — ${signal.detector}`;
-              const message = `${signal.what}\n${assessment.narrative}\n(confidence ${assessment.confidence})`;
-              const pushed = await pushAnomaly(title, message);
-              await db.query(
-                `INSERT INTO shadow_push (id, ts, signal_id, signal, assessment, would_send, pushed)
-                 VALUES ($1, now(), $2, $3, $4, $5, $6)`,
-                [ulid(), signal.id, JSON.stringify(signal), JSON.stringify(assessment),
-                 `${title}\n${message}`, pushed],
-              );
-              log('analyst', pushed ? 'S1 PUSHED' : 'S1 → shadow log', { signal: signal.id });
+            // Deterministic gate (DECISIONS #109): S1 always; S2 only within
+            // the daily budget and once per condition per cooldown window.
+            const day = new Date().toISOString().slice(0, 10);
+            const decision = decideTriage(signal, {
+              usedToday: Number((await redis.get(TRIAGE_BUDGET_KEY(day))) ?? 0),
+              dailyCap: env.triagePerDay,
+              onCooldown: (await redis.exists(TRIAGE_COOLDOWN_KEY(signal.dedupe_key))) === 1,
+            });
+            if (!decision.triage) {
+              log('analyst', `triage skipped (${decision.reason})`, { signal: signal.id, severity: signal.severity });
+            } else {
+              if (signal.severity === 'S2') {
+                const budgetKey = TRIAGE_BUDGET_KEY(day);
+                await redis.incr(budgetKey);
+                await redis.expire(budgetKey, 2 * 86400);
+              }
+              await redis.set(TRIAGE_COOLDOWN_KEY(signal.dedupe_key), '1', 'EX', TRIAGE_COOLDOWN_S);
+              const assessment = await triageSignal(db, redis, client, signal);
+              // S1 that survives triage → shadow log (and push, iff the gate is open)
+              if (signal.severity === 'S1' && assessment && assessment.severity_final === 'S1') {
+                const title = `ORRERY S1 — ${signal.detector}`;
+                const message = `${signal.what}\n${assessment.narrative}\n(confidence ${assessment.confidence})`;
+                const pushed = await pushAnomaly(title, message);
+                await db.query(
+                  `INSERT INTO shadow_push (id, ts, signal_id, signal, assessment, would_send, pushed)
+                   VALUES ($1, now(), $2, $3, $4, $5, $6)`,
+                  [ulid(), signal.id, JSON.stringify(signal), JSON.stringify(assessment),
+                   `${title}\n${message}`, pushed],
+                );
+                log('analyst', pushed ? 'S1 PUSHED' : 'S1 → shadow log', { signal: signal.id });
+              }
             }
           }
         }
       } catch (err) {
         logError('analyst', `triage failed for ${signal.id}`, err);
+        // A transient analyst failure must not cost the calibration review an
+        // S1: no assessment means no downgrade, so the S1 stands — log it
+        // untriaged exactly like the no-key path (fresh-eyes review HIGH-1).
+        if (signal.severity === 'S1') {
+          try {
+            await shadowLogUntriaged(db, signal, 'analyst error');
+          } catch (shadowErr) {
+            logError('analyst', `shadow-log write failed for ${signal.id}`, shadowErr);
+          }
+        }
       }
     }
     await redis.set(CURSOR_KEY, id); // advance even on failure — no poison-pill loops
@@ -143,8 +179,10 @@ export async function jobBriefingCheck(db: Queryable): Promise<void> {
   await jobBriefing(db);
 }
 
-/** Ops watch: a collector that has been silent >30 min is worth a real alert. */
-export async function jobOpsWatch(redis: Redis): Promise<void> {
+/** Ops watch: a collector that has been silent >30 min is worth a real alert,
+ *  and so is analyst spend closing in on the monthly breaker — the breaker
+ *  tripping mid-soak silently darkens the briefing streak (DECISIONS #109). */
+export async function jobOpsWatch(redis: Redis, db: Queryable): Promise<void> {
   const meta = await redis.hgetall(REDIS_KEYS.hotSnapshotMeta);
   const updatedAtMs = Number(meta.updatedAtMs ?? 0);
   const silentMin = (Date.now() - updatedAtMs) / 60000;
@@ -152,6 +190,19 @@ export async function jobOpsWatch(redis: Redis): Promise<void> {
     const latch = await redis.set('ops:collector-stale', '1', 'EX', 6 * 3600, 'NX');
     if (latch !== null) {
       await pushOps('ORRERY — collector silent', `No new snapshot for ${Math.round(silentMin)} minutes.`);
+    }
+  }
+
+  const client = new AnalystClient(db);
+  const mtd = await client.monthToDateUsd();
+  if (mtd >= 0.7 * env.monthlySpendCapUsd) {
+    const month = new Date().toISOString().slice(0, 7);
+    const latch = await redis.set(`ops:spend-warn:${month}`, '1', 'EX', 35 * 86400, 'NX');
+    if (latch !== null) {
+      await pushOps(
+        'ORRERY — analyst spend at 70% of cap',
+        `$${mtd.toFixed(2)} of $${env.monthlySpendCapUsd} this month. At the cap the briefing degrades to "unavailable — spend cap".`,
+      );
     }
   }
 }

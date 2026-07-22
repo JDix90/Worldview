@@ -30,3 +30,16 @@ export function savePrefs(p: Prefs): void {
     /* private mode etc. — preference just won't persist */
   }
 }
+
+/**
+ * Builder instrumentation gate (?debug=1): FPS meter, analyst spend, and any
+ * future dev telemetry hide behind this so the default HUD speaks to a
+ * viewer, not the author (fresh-eyes review, 2026-07-22).
+ */
+export const DEBUG_UI: boolean = (() => {
+  try {
+    return new URLSearchParams(window.location.search).has('debug');
+  } catch {
+    return false;
+  }
+})();

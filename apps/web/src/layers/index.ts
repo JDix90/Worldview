@@ -25,10 +25,14 @@ import { airportDelaysLayer } from './airportDelays';
 
 export function buildLayerDefs(deps: { milStore: AircraftStore }): LayerDef[] {
   return [
+    // Default roster trimmed 2026-07-22 (DECISIONS #109): the flagship
+    // (flights + anomalies) and the event layers stay on; ambient texture
+    // (satellites, wind, currents, aerosol) and key-blocked sources
+    // (vessels, fires) are opt-in. Everything remains one toggle away.
     makeSatellitesLayer({
       id: 'sats',
       label: 'SATELLITES',
-      defaultOn: true,
+      defaultOn: false,
       // weather = GOES/Meteosat/Himawari et al — populates the GEO ring
       groups: ['stations', 'gps-ops', 'galileo', 'beidou', 'glo-ops', 'visual', 'weather'],
       color: 0x9adcf0,

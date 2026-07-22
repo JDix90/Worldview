@@ -3,6 +3,9 @@
 requests>=2.31
 Pillow>=10.0
 numpy>=1.24
+sgp4>=2.23      # sky.py ISS pass prediction — was installed by hand on the Pi
+                # but missing here; a clean venv rebuild would silently lose
+                # the evening ISS line (fresh-eyes review, 2026-07-22)
 # Hardware-only (comes from the vendored PiSugar driver, NOT pip):
 #   whisplay  → clone github.com/PiSugar/whisplay, put runtime/ on PYTHONPATH
 #   RPi.GPIO / gpiod / spidev → per the Whisplay install docs

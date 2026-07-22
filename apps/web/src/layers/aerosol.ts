@@ -80,7 +80,7 @@ const fragmentShader = /* glsl */ `
 export const aerosolLayer: LayerDef = {
   id: 'aerosol',
   label: 'AEROSOL / SMOKE',
-  defaultOn: true,
+  defaultOn: false,
   attribution: 'NASA GIBS',
   init(ctx: LayerCtx): LayerInstance {
     const material = new THREE.ShaderMaterial({

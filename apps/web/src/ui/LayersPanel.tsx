@@ -2,7 +2,6 @@
  * Layer toggles — bottom-right chip that expands to one switch per layer,
  * with data attribution. Enabled-set persists via layers/registry.
  */
-import { useState } from 'react';
 import type { LayerDef } from '../layers/registry';
 
 const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
@@ -40,15 +39,19 @@ interface Props {
   defs: LayerDef[];
   enabled: Set<string>;
   onToggle: (id: string) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Chip hides while another right-dock panel is open (one surface at a time). */
+  chipVisible: boolean;
 }
 
-export function LayersPanel({ defs, enabled, onToggle }: Props) {
-  const [open, setOpen] = useState(false);
-
+export function LayersPanel({ defs, enabled, onToggle, open, onOpenChange, chipVisible }: Props) {
   if (!open) {
+    if (!chipVisible) return null;
     return (
-      <div style={chip} onClick={() => setOpen(true)}>
+      <div style={chip} onClick={() => onOpenChange(true)}>
         LAYERS <span style={{ color: '#4fd8ff' }}>●{[...enabled].length}</span>
+        <span style={{ opacity: 0.5 }}>/{defs.length}</span>
       </div>
     );
   }
@@ -60,7 +63,7 @@ export function LayersPanel({ defs, enabled, onToggle }: Props) {
       <div style={{ display: 'flex', marginBottom: 6 }}>
         <span style={{ color: '#4fd8ff', letterSpacing: 1 }}>LAYERS</span>
         <span style={{ flex: 1 }} />
-        <span onClick={() => setOpen(false)} style={{ cursor: 'pointer', opacity: 0.6 }}>✕</span>
+        <span onClick={() => onOpenChange(false)} style={{ cursor: 'pointer', opacity: 0.6 }}>✕</span>
       </div>
       {defs.map((d) => {
         const on = enabled.has(d.id);

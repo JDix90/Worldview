@@ -15,6 +15,11 @@ import { buildLayerDefs } from './layers';
 import { loadEnabled, saveEnabled, type LayerCard } from './layers/registry';
 import { loadPrefs, savePrefs } from './prefs';
 
+/** The right edge hosts four surfaces (feed, home, location, layers). One at
+ *  a time: they used to overlap each other and the chip stack (fresh-eyes
+ *  review, 2026-07-22 / DECISIONS #109). */
+type PanelId = 'feed' | 'home' | 'location' | 'layers';
+
 export function App() {
   const store = useMemo(() => new AircraftStore(), []);
   const milStore = useMemo(() => new AircraftStore(), []);
@@ -22,6 +27,12 @@ export function App() {
   const [selectedHex, setSelectedHex] = useState<string | null>(null);
   const [routeHex, setRouteHex] = useState<string | null>(null);
   const [card, setCard] = useState<LayerCard | null>(null);
+  const [openPanel, setOpenPanel] = useState<PanelId | null>(null);
+  const panelProps = (id: PanelId) => ({
+    open: openPanel === id,
+    onOpenChange: (v: boolean) => setOpenPanel(v ? id : null),
+    chipVisible: openPanel === null,
+  });
   const [spinEnabled, setSpinEnabled] = useState(() => loadPrefs().spinEnabled);
   const toggleSpin = useCallback(() => {
     setSpinEnabled((prev) => {
@@ -81,12 +92,12 @@ export function App() {
         />
       )}
       {card && !selectedHex && <ObjectCard card={card} onClose={() => setCard(null)} />}
-      <FeedPanel />
-      <HomeDashboard />
-      <LocationChip />
-      <ScreenToggle />
-      <SpinToggle enabled={spinEnabled} onToggle={toggleSpin} />
-      <LayersPanel defs={layerDefs} enabled={layersEnabled} onToggle={toggleLayer} />
+      <FeedPanel open={openPanel === 'feed'} onOpenChange={(v) => setOpenPanel(v ? 'feed' : null)} />
+      <HomeDashboard {...panelProps('home')} />
+      <LocationChip {...panelProps('location')} />
+      {openPanel === null && <ScreenToggle />}
+      {openPanel === null && <SpinToggle enabled={spinEnabled} onToggle={toggleSpin} />}
+      <LayersPanel defs={layerDefs} enabled={layersEnabled} onToggle={toggleLayer} {...panelProps('layers')} />
     </>
   );
 }

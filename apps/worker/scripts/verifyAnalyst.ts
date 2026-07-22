@@ -98,6 +98,8 @@ try {
     signals: {
       s1: [],
       s2: [{ payload: { what: 'SYNTHETIC 7700 cluster over the North Sea' }, disposition: 'unexplained' }],
+      s2Count: 1,
+      s2ByDetector: { emergency_squawk: 1 },
       s3Count: 4,
       s3Sample: ['SYNTHETIC squawk 7600'],
     },

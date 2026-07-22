@@ -107,7 +107,7 @@ const fragmentShader = /* glsl */ `
 export const wildfiresLayer: LayerDef = {
   id: 'fires',
   label: 'WILDFIRES',
-  defaultOn: true,
+  defaultOn: false,
   attribution: 'NASA FIRMS',
   init(ctx: LayerCtx): LayerInstance {
     const geometry = new THREE.CircleGeometry(1, 12);

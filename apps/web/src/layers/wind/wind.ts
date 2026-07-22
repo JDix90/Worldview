@@ -53,7 +53,7 @@ const fragmentShader = /* glsl */ `
 export const windLayer: LayerDef = {
   id: 'wind',
   label: 'WIND',
-  defaultOn: true,
+  defaultOn: false,
   attribution: 'Open-Meteo / GFS',
   init(ctx: LayerCtx): LayerInstance {
     // per-particle state

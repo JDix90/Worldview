@@ -95,7 +95,7 @@ async function main(): Promise<void> {
         case 'briefing-check':
           return jobBriefingCheck(pool);
         case 'ops-watch':
-          return jobOpsWatch(dataRedis);
+          return jobOpsWatch(dataRedis, pool);
         default:
           throw new Error(`unknown job: ${job.name}`);
       }

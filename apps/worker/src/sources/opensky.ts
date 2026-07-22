@@ -37,6 +37,9 @@ async function getToken(): Promise<string> {
       client_id: env.openskyClientId,
       client_secret: env.openskyClientSecret,
     }),
+    // A hung upstream must fail the poll, not park a worker slot (concurrency
+    // is 2 — two hangs would stall the whole pipeline).
+    signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
@@ -65,7 +68,7 @@ export async function fetchGlobalSnapshot(): Promise<OpenSkyPollResult> {
     throw new Error('OpenSky credentials missing and OPENSKY_ALLOW_ANONYMOUS is not set');
   }
 
-  const res = await fetch(STATES_URL, { headers });
+  const res = await fetch(STATES_URL, { headers, signal: AbortSignal.timeout(45_000) });
   if (res.status === 401) {
     cachedToken = null; // token expired mid-flight; next poll re-authenticates
     throw new Error('OpenSky /states/all: 401 (token rejected)');

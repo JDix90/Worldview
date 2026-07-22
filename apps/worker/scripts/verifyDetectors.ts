@@ -6,6 +6,7 @@
 import { detectDataHealth } from '../src/detect/d0DataHealth.js';
 import { detectSquawks, haversineKm, type D2State } from '../src/detect/d2Squawks.js';
 import { decideSeverity } from '../src/detect/emit.js';
+import { decideTriage } from '../src/analyst/triagePolicy.js';
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = ''): void {
@@ -113,6 +114,21 @@ check('cap: 3 in window → demote with audit', capped.severity === 'S2' && capp
 const aged = decideSeverity('S1', [nowMs - 25 * 3600_000, nowMs - 26 * 3600_000, nowMs - 27 * 3600_000], nowMs);
 check('cap: S1s older than 24h do not count', aged.severity === 'S1');
 check('cap: S2/S3 pass through untouched', decideSeverity('S3', [nowMs, nowMs, nowMs], nowMs).severity === 'S3');
+
+// ── Triage gate (DECISIONS #109) ──────────────────────────────────────
+const sigS1 = { severity: 'S1' as const, dedupe_key: 'd2:7500:abc' };
+const sigS2 = { severity: 'S2' as const, dedupe_key: 'd3:gps:baltic' };
+const sigS3 = { severity: 'S3' as const, dedupe_key: 'd2:7600:def' };
+check('triage: S1 always goes, even over cap and on cooldown',
+  decideTriage(sigS1, { usedToday: 99, dailyCap: 10, onCooldown: true }).triage);
+check('triage: S2 within budget, fresh condition → goes',
+  decideTriage(sigS2, { usedToday: 3, dailyCap: 10, onCooldown: false }).triage);
+check('triage: S2 at daily cap → skipped',
+  decideTriage(sigS2, { usedToday: 10, dailyCap: 10, onCooldown: false }).reason === 'daily_cap');
+check('triage: S2 condition on cooldown → skipped',
+  decideTriage(sigS2, { usedToday: 0, dailyCap: 10, onCooldown: true }).reason === 'cooldown');
+check('triage: S3 never triaged',
+  decideTriage(sigS3, { usedToday: 0, dailyCap: 10, onCooldown: false }).reason === 'not_triageable');
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);

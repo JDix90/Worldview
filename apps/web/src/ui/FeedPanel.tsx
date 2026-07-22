@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react';
 import type { Severity, Signal } from '@orrery/shared';
 import { apiGet } from '../feed/api';
+import { DEBUG_UI } from '../prefs';
 
 interface FeedSignal extends Signal {
   assessment: {
@@ -78,8 +79,37 @@ function Sparkline({ points }: { points: Array<{ ts: number; total: number }> })
   );
 }
 
-export function FeedPanel() {
-  const [open, setOpen] = useState(false);
+/** Renders briefing markdown just enough for the feed: `**bold**` becomes
+ *  bold, `#`-headers become cyan section lines — raw asterisks read as a
+ *  rendering bug to a first-time viewer (fresh-eyes review, 2026-07-22). */
+function MarkdownLite({ text }: { text: string }) {
+  return (
+    <>
+      {text.split('\n').map((line, i) => {
+        const header = line.match(/^#{1,3}\s+(.*)$/);
+        const content = header ? header[1]! : line;
+        const parts = content
+          .split(/\*\*(.+?)\*\*/g)
+          .map((seg, j) => (j % 2 === 1 ? <strong key={j} style={{ color: '#dbe7f3' }}>{seg}</strong> : seg));
+        if (header) {
+          return (
+            <div key={i} style={{ color: '#4fd8ff', letterSpacing: 1, margin: '6px 0 2px' }}>
+              {parts}
+            </div>
+          );
+        }
+        return <div key={i}>{content === '' ? ' ' : parts}</div>;
+      })}
+    </>
+  );
+}
+
+interface FeedPanelProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+export function FeedPanel({ open, onOpenChange }: FeedPanelProps) {
   const [tab, setTab] = useState<'signals' | 'briefing'>('signals');
   const [signals, setSignals] = useState<FeedSignal[]>([]);
   const [briefing, setBriefing] = useState<Briefing | null>(null);
@@ -96,9 +126,11 @@ export function FeedPanel() {
       apiGet<{ briefings: Briefing[] }>('/api/briefings?limit=1')
         .then((d) => alive && setBriefing(d.briefings[0] ?? null))
         .catch(() => undefined);
-      apiGet<{ monthToDate: { mtd_usd: number } }>('/api/analyst/usage')
-        .then((d) => alive && setCost(d.monthToDate))
-        .catch(() => undefined);
+      if (DEBUG_UI) {
+        apiGet<{ monthToDate: { mtd_usd: number } }>('/api/analyst/usage')
+          .then((d) => alive && setCost(d.monthToDate))
+          .catch(() => undefined);
+      }
     };
     const loadStats = () => {
       apiGet<{ points: Array<{ ts: number; total: number }> }>('/api/stats/traffic24h')
@@ -132,7 +164,7 @@ export function FeedPanel() {
   if (!open) {
     return (
       <div
-        onClick={() => setOpen(true)}
+        onClick={() => onOpenChange(true)}
         style={{
           position: 'fixed', top: 10, right: 12, cursor: 'pointer',
           font: `11px ${mono}`, color: 'rgba(143,163,184,0.85)',
@@ -163,13 +195,18 @@ export function FeedPanel() {
           </span>
         ))}
         <span style={{ flex: 1 }} />
-        {cost && <span style={{ opacity: 0.45 }}>${cost.mtd_usd.toFixed(2)} mtd</span>}
-        <span onClick={() => setOpen(false)} style={{ cursor: 'pointer', opacity: 0.6 }}>✕</span>
+        {DEBUG_UI && cost && <span style={{ opacity: 0.45 }}>${cost.mtd_usd.toFixed(2)} mtd</span>}
+        <span onClick={() => onOpenChange(false)} style={{ cursor: 'pointer', opacity: 0.6 }}>✕</span>
       </div>
 
       {tab === 'signals' && (
         <div>
           <Sparkline points={traffic} />
+          <div style={{ opacity: 0.45, marginBottom: 8, fontSize: 10 }}>
+            <span style={{ color: SEV_COLOR.S1 }}>S1</span> page-worthy ·{' '}
+            <span style={{ color: SEV_COLOR.S2 }}>S2</span> notable ·{' '}
+            <span style={{ color: SEV_COLOR.S3 }}>S3</span> routine, digest-only
+          </div>
           {learning && (
             <div style={{ opacity: 0.55, marginBottom: 12 }}>
               learning normal: {Math.round((learning.partial / Math.max(1, learning.totalBins)) * 100)}% partial ·{' '}
@@ -216,7 +253,7 @@ export function FeedPanel() {
                 {briefing.date_local} · filed {new Date(briefing.ts).toISOString().slice(11, 16)}Z
                 {briefing.quiet && ' · quiet'}
               </div>
-              <div style={{ whiteSpace: 'pre-wrap' }}>{briefing.body_md}</div>
+              <div><MarkdownLite text={briefing.body_md} /></div>
             </>
           )}
         </div>
