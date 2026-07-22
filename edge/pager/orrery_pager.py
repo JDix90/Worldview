@@ -350,6 +350,70 @@ def fetch_local_conditions(lat: float, lon: float) -> dict:
     return out
 
 
+# ─────────────────────────── crime (Denver only) ───────────────────────────
+# Recently-reported crime near home, mirroring the web dashboard's registry of
+# one (DECISIONS #113). The pager already fetches keyless upstreams directly
+# (weather/aqi/alerts above), so this stays furniture — no server change.
+CRIME_DAYS = 7
+_CRIME_HOME = (39.7392, -104.9903)   # Denver; coverage radius below
+_CRIME_RADIUS_MI = 25
+_CRIME_QUERY_URL = (
+    "https://services1.arcgis.com/zdB7qR0BtYrg0Xpl/arcgis/rest/services/"
+    "ODC_CRIME_OFFENSES_P/FeatureServer/324/query"
+)
+_CRIME_VIOLENT = {"murder", "robbery", "aggravated-assault",
+                  "other-crimes-against-persons", "sexual-assault"}
+_CRIME_PROPERTY = {"burglary", "larceny", "theft-from-motor-vehicle",
+                   "auto-theft", "arson"}
+
+
+def _crime_group(cat: str) -> str:
+    if cat in _CRIME_VIOLENT:
+        return "violent"
+    if cat in _CRIME_PROPERTY:
+        return "property"
+    return "other"
+
+
+def fetch_crime(lat: float, lon: float) -> dict:
+    """Last CRIME_DAYS of reported offenses around home. Returns a dict the
+    CRIME page renders: {covered: False} outside coverage, {covered: True,
+    incidents:[{lat,lon,group}], n} on success, {covered: True, error: True}
+    on a failed poll. Denver only for now (registry of one)."""
+    import math
+    dlat = (lat - _CRIME_HOME[0]) * 69.0
+    dlon = (lon - _CRIME_HOME[1]) * 69.0 * math.cos(math.radians(lat))
+    if dlat * dlat + dlon * dlon > _CRIME_RADIUS_MI * _CRIME_RADIUS_MI:
+        return {"covered": False}
+    since = time.strftime("%Y-%m-%d", time.gmtime(time.time() - CRIME_DAYS * 86400))
+    bbox = f"{lon - 0.15},{lat - 0.12},{lon + 0.15},{lat + 0.12}"
+    try:
+        r = requests.get(
+            _CRIME_QUERY_URL,
+            params={
+                "where": f"REPORTED_DATE >= DATE '{since}' AND IS_CRIME = 1",
+                "outFields": "OFFENSE_CATEGORY_ID",
+                "geometry": bbox, "geometryType": "esriGeometryEnvelope",
+                "inSR": "4326", "spatialRel": "esriSpatialRelIntersects",
+                "resultRecordCount": "2000", "f": "geojson",
+            },
+            timeout=10,
+        )
+        r.raise_for_status()
+        inc = []
+        for f in r.json().get("features", []):
+            g = f.get("geometry") or {}
+            c = g.get("coordinates")
+            if not c or len(c) < 2:
+                continue
+            cat = (f.get("properties") or {}).get("OFFENSE_CATEGORY_ID", "")
+            inc.append({"lon": c[0], "lat": c[1], "group": _crime_group(cat)})
+        return {"covered": True, "incidents": inc, "n": len(inc)}
+    except Exception as e:
+        print(f"[display] crime fetch failed: {e}", file=sys.stderr)
+        return {"covered": True, "error": True}
+
+
 # ─────────────────────────── text helpers ───────────────────────────
 def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_w: int) -> list[str]:
     words, lines, cur = text.split(), [], ""
@@ -386,7 +450,7 @@ def _ago(sec: int) -> str:
 # ─────────────────────────── page rendering ───────────────────────────
 # Living-room lineup (2026-07-21): TODAY (weather/alerts) leads; instrument
 # vitals moved to SYSTEM; GPS jamming left the Pi entirely (browser only).
-PAGES = ["TODAY", "SIGNALS", "BRIEFING", "LOCAL", "SYSTEM"]
+PAGES = ["TODAY", "SIGNALS", "BRIEFING", "LOCAL", "CRIME", "SYSTEM"]
 
 
 def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
@@ -422,6 +486,9 @@ def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
     s = summary.raw
     if page == "TODAY":
         _page_today(d, s, conditions or {}, L)
+    elif page == "CRIME":
+        # like TODAY, driven by the conditions bundle (holds fetched crime)
+        _page_crime(d, s, conditions or {}, L)
     else:
         {
             "SIGNALS": _page_signals,
@@ -677,6 +744,114 @@ def _page_local(d, s, _sys, _summ, L: Layout) -> None:
         y += L.line_md + L.line_sm + 8
         if y > L.h - L.footer_h - L.line_md:
             break
+
+
+_CRIME_COL = {"violent": RED, "property": AMBER, "other": (120, 140, 160)}
+# heat ramp: BG → teal → cyan → amber → red (sparse stays background dark)
+_CRIME_STOPS = [0.0, 0.15, 0.4, 0.7, 1.0]
+_CRIME_RAMP_R = [6, 25, 79, 255, 255]
+_CRIME_RAMP_G = [14, 80, 216, 179, 70]
+_CRIME_RAMP_B = [22, 120, 255, 10, 70]
+_CRIME_HALF_MI = 8.0  # vertical half-span of the map region
+
+
+def _page_crime(d, s, c, L: Layout) -> None:
+    """Heat map of recently-reported crime around home (Denver open data).
+    KDE-style density, home marker at centre. Data via fetch_crime()."""
+    y0 = L.header_h + L.pad
+    d.text((L.pad, y0), "CRIME", font=L.sm, fill=CYAN)
+    crime = c.get("crime")
+    home = s.get("home") or {}
+    hlat, hlon = home.get("lat"), home.get("lon")
+
+    if crime is None:
+        d.text((L.pad, L.h // 2 - 8), "crime map loading…", font=L.md, fill=DIM)
+        return
+    if not crime.get("covered"):
+        d.text((L.pad, L.h // 2 - 10), "crime map: Denver only", font=L.md, fill=DIM)
+        d.text((L.pad, L.h // 2 + L.line_md - 4), "home is outside coverage", font=L.sm, fill=DIM)
+        return
+    if crime.get("error") or hlat is None:
+        d.text((L.pad, L.h // 2 - 8), "crime data unavailable", font=L.md, fill=DIM)
+        return
+
+    inc = crime.get("incidents") or []
+    n = crime.get("n", len(inc))
+    hdr = f"last {CRIME_DAYS}d · {n} reported"
+    d.text((L.pad + d.textlength("CRIME", font=L.sm) + 10, y0), hdr, font=L.sm, fill=WHITE)
+
+    # legend row (group counts, matching the web dashboard colors)
+    gc = {"violent": 0, "property": 0, "other": 0}
+    for i2 in inc:
+        gc[i2.get("group", "other")] = gc.get(i2.get("group", "other"), 0) + 1
+    ly = y0 + L.line_sm + 2
+    lx = L.pad
+    for grp in ("violent", "property", "other"):
+        col = _CRIME_COL[grp]
+        d.ellipse((lx, ly + 3, lx + 7, ly + 10), fill=col)
+        seg = f"{grp} {gc[grp]}"
+        d.text((lx + 11, ly), seg, font=L.sm, fill=col)
+        lx += 11 + d.textlength(seg, font=L.sm) + 12
+
+    # map region
+    RX0 = L.pad
+    RY0 = ly + L.line_sm + 4
+    RW = L.w - 2 * L.pad
+    RH = L.h - L.footer_h - 4 - RY0
+    if RW < 20 or RH < 20:
+        return
+
+    img = getattr(d, "_image", None)
+    try:
+        import math
+
+        import numpy as np
+
+        mi_per_px = (2 * _CRIME_HALF_MI) / RH
+        coslat = math.cos(math.radians(hlat))
+        grid = np.zeros((RH, RW), dtype=np.float32)
+        sigma = max(3.0, RH / 38.0)
+        rad = int(sigma * 3)
+        ax = np.arange(-rad, rad + 1)
+        gx, gy = np.meshgrid(ax, ax)
+        kernel = np.exp(-(gx * gx + gy * gy) / (2 * sigma * sigma)).astype(np.float32)
+        for i2 in inc:
+            dx = (i2["lon"] - hlon) * 69.0 * coslat
+            dy = (i2["lat"] - hlat) * 69.0
+            px = int(RW / 2 + dx / mi_per_px)
+            py = int(RH / 2 - dy / mi_per_px)
+            xa, xb, ya, yb = px - rad, px + rad + 1, py - rad, py + rad + 1
+            kx0, ky0 = max(0, -xa), max(0, -ya)
+            X0, Y0, X1, Y1 = max(0, xa), max(0, ya), min(RW, xb), min(RH, yb)
+            if X1 <= X0 or Y1 <= Y0:
+                continue
+            grid[Y0:Y1, X0:X1] += kernel[ky0:ky0 + (Y1 - Y0), kx0:kx0 + (X1 - X0)]
+        vmax = float(grid.max())
+        if vmax > 0:
+            nrm = np.clip(grid / vmax, 0, 1) ** 0.7
+            rgb = np.dstack([
+                np.interp(nrm, _CRIME_STOPS, _CRIME_RAMP_R),
+                np.interp(nrm, _CRIME_STOPS, _CRIME_RAMP_G),
+                np.interp(nrm, _CRIME_STOPS, _CRIME_RAMP_B),
+            ]).astype(np.uint8)
+            heat = Image.fromarray(rgb, "RGB")
+        else:
+            heat = Image.new("RGB", (RW, RH), BG)
+        if img is not None:
+            img.paste(heat, (RX0, RY0))
+    except Exception as e:  # numpy missing / render error → don't blank the page
+        print(f"[display] crime heatmap failed: {e}", file=sys.stderr)
+        d.text((RX0, RY0 + RH // 2 - 8), "heatmap unavailable", font=L.md, fill=DIM)
+
+    # frame + home marker (centre) + scale note
+    d.rectangle((RX0, RY0, RX0 + RW - 1, RY0 + RH - 1), outline=PANEL)
+    cx, cy = RX0 + RW // 2, RY0 + RH // 2
+    d.ellipse((cx - 5, cy - 5, cx + 5, cy + 5), outline=WHITE)
+    d.ellipse((cx - 1, cy - 1, cx + 2, cy + 2), fill=WHITE)
+    d.text((cx + 8, cy - 6), "home", font=L.sm, fill=WHITE)
+    scale = f"~{round(2 * _CRIME_HALF_MI)} mi N–S · Denver Open Data"
+    d.text((RX0 + RW - d.textlength(scale, font=L.sm) - 4, RY0 + RH - L.line_sm - 2),
+           scale, font=L.sm, fill=DIM)
 
 
 def _page_system(d, s, sysinfo, summ, L: Layout) -> None:
@@ -959,6 +1134,8 @@ class App:
     # screen-sleep state
     conditions: Optional[dict] = None
     _cond_at: float = 0.0
+    _crime_at: float = 0.0
+    _crime_cache: Optional[dict] = None  # persists across the 10-min conditions refresh
     _mode: str = "auto"          # 'on' | 'off' | 'auto', newest writer wins
     _mode_ts: float = 0.0
     _awake: bool = True
@@ -1004,6 +1181,12 @@ class App:
             self.conditions["traffic"] = [p["total"] for p in r.json().get("points", [])]
         except Exception:
             pass
+        # crime updates Mon–Fri, so a 30-min cadence is plenty; cache survives
+        # the wholesale conditions refresh above and is re-attached each pass.
+        if self._crime_cache is None or time.time() - self._crime_at > 1800:
+            self._crime_at = time.time()
+            self._crime_cache = fetch_crime(lat, lon)
+        self.conditions["crime"] = self._crime_cache
         self._dirty = True
 
     def _fetch_server_mode(self) -> None:
@@ -1280,6 +1463,10 @@ def main() -> None:
             {"event": "Heat Advisory", "severity": "Moderate", "until": "21:00"}])
         cond_tornado = dict(cond_calm, cond="thunderstorm", alerts=[
             {"event": "Tornado Warning", "severity": "Extreme", "until": "19:45"}])
+        # live crime pull for the CRIME page mock, at the snapshot's home
+        _home = data.get("home") or {}
+        if _home.get("lat") is not None:
+            cond_alerts["crime"] = fetch_crime(_home["lat"], _home["lon"])
         for i in range(len(PAGES)):
             render(summ, i, sysinfo, L, cond_alerts).save(os.path.join(args.mock, f"{PAGES[i].lower()}.png"))
         render(summ, 0, sysinfo, L, cond_calm).save(os.path.join(args.mock, "today_calm.png"))
