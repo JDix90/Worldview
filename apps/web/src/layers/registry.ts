@@ -66,10 +66,16 @@ export interface LayerDef {
   init: (ctx: LayerCtx) => LayerInstance;
 }
 
-const STORAGE_KEY = 'orrery:layers';
+// v2 bump (2026-07-22, DECISIONS #110): saved toggles pin every layer id, so
+// the trimmed default roster of DECISIONS #109 would never reach a browser
+// that had toggled anything. A key bump is a one-time reset to the new
+// defaults; toggles persist under the new key as before.
+const STORAGE_KEY = 'orrery:layers:v2';
+const LEGACY_KEYS = ['orrery:layers'];
 
 export function loadEnabled(defs: LayerDef[]): Set<string> {
   try {
+    for (const k of LEGACY_KEYS) localStorage.removeItem(k);
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const saved = JSON.parse(raw) as Record<string, boolean>;
