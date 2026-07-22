@@ -252,9 +252,14 @@ export function registerApi(
       const milHexes = new Set(feed.milList().map((a) => a.hex));
       const milByHex = new Map(feed.milList().map((a) => [a.hex, a]));
       let overheadCount = 0;
+      // Local east/north miles from home (equirectangular; exact enough under
+      // 150 mi). Lets the dashboard radar plot true positions instead of
+      // snapping to distMi + 16-point compass (DECISIONS #112).
+      const cosHomeLat = Math.cos((home.lat * Math.PI) / 180);
+      const MI_PER_DEG = 69.0;
       const tops: Array<{
         callsign: string | null; altFt: number | null; distMi: number;
-        bearing: string; mil: boolean; typeDesc: string | null;
+        bearing: string; dxMi: number; dyMi: number; mil: boolean; typeDesc: string | null;
       }> = [];
       for (const a of feed.allAircraft()) {
         if (a.onGround) continue;
@@ -266,6 +271,8 @@ export function registerApi(
           altFt: a.altBaroM != null ? Math.round(a.altBaroM * 3.28084) : null,
           distMi: Math.round(d),
           bearing: compass16(home.lat, home.lon, a.lat, a.lon),
+          dxMi: Math.round((a.lon - home.lon) * MI_PER_DEG * cosHomeLat * 10) / 10,
+          dyMi: Math.round((a.lat - home.lat) * MI_PER_DEG * 10) / 10,
           mil: milHexes.has(a.hex),
           typeDesc: milByHex.get(a.hex)?.typeDesc ?? null,
         });

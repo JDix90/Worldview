@@ -10,30 +10,79 @@ const DIM = 'rgba(143,163,184,0.6)';
 const FAINT = 'rgba(79,216,255,0.22)';
 
 // ── Overhead radar ────────────────────────────────────────────────────────
-// Plots the nearest aircraft (overhead.tops) by true bearing + distance on a
-// north-up polar scope. Rings at 50/100/150 mi; military amber, civil cyan.
+// A north-up local scope centred on home. Plots the nearest aircraft at their
+// true east/north offset (dxMi/dyMi from the server); the scope auto-zooms to
+// the farthest plotted aircraft so nearby traffic spreads out instead of
+// piling on the centre dot. Translucent ground plate + home marker underneath.
 const COMPASS_DEG: Record<string, number> = {
   N: 0, NNE: 22.5, NE: 45, ENE: 67.5, E: 90, ESE: 112.5, SE: 135, SSE: 157.5,
   S: 180, SSW: 202.5, SW: 225, WSW: 247.5, W: 270, WNW: 292.5, NW: 315, NNW: 337.5,
 };
+// Scope radius snaps up to one of these (mi) so ring labels stay tidy.
+const RANGE_STEPS = [5, 10, 15, 25, 50, 75, 100, 150];
 
 export interface RadarBlip {
   distMi: number;
   bearing: string;
+  /** East/north miles from home (preferred). Falls back to bearing+distMi. */
+  dxMi?: number;
+  dyMi?: number;
   mil: boolean;
 }
 
-export function OverheadRadar({ blips }: { blips: RadarBlip[] }) {
-  const R = 46; // scope radius (px)
-  const MAX_MI = 150;
-  const S = R + 14; // half viewbox — leaves room for cardinal labels
-  const rings = [50, 100, 150];
+/** East/north miles for a blip — exact offset if present, else derived from
+ *  the 16-point compass bearing + distance (older/cached summaries). */
+function blipEastNorth(b: RadarBlip): { e: number; n: number } {
+  if (typeof b.dxMi === 'number' && typeof b.dyMi === 'number') return { e: b.dxMi, n: b.dyMi };
+  const deg = COMPASS_DEG[b.bearing] ?? 0;
+  const a = deg * (Math.PI / 180);
+  return { e: Math.sin(a) * b.distMi, n: Math.cos(a) * b.distMi };
+}
+
+export function OverheadRadar({ blips, homeLabel }: { blips: RadarBlip[]; homeLabel?: string }) {
+  const R = 58; // scope radius (px)
+  const S = R + 16; // half viewbox — room for cardinal labels
+  const pts = blips.map((b) => ({ ...blipEastNorth(b), mil: b.mil }));
+  const maxMi = Math.max(0.5, ...pts.map((p) => Math.hypot(p.e, p.n)));
+  const scaleMi = RANGE_STEPS.find((s) => s >= maxMi) ?? 150;
+  const rings = [scaleMi / 3, (scaleMi * 2) / 3, scaleMi];
+  const toXY = (e: number, n: number) => {
+    const k = Math.min(1, Math.hypot(e, n) / scaleMi); // clamp to the rim
+    const m = Math.hypot(e, n) || 1;
+    return { x: (e / m) * k * R, y: -(n / m) * k * R };
+  };
+  const fmtMi = (mi: number) => (mi >= 10 ? Math.round(mi) : Math.round(mi * 10) / 10);
 
   return (
     <svg width={S * 2} height={S * 2} viewBox={`${-S} ${-S} ${S * 2} ${S * 2}`} style={{ display: 'block' }}>
-      {rings.map((mi) => (
-        <circle key={mi} cx={0} cy={0} r={(mi / MAX_MI) * R} fill="none" stroke={FAINT} strokeWidth={1} />
-      ))}
+      <defs>
+        <radialGradient id="radarGround" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="rgba(79,216,255,0.12)" />
+          <stop offset="70%" stopColor="rgba(79,216,255,0.05)" />
+          <stop offset="100%" stopColor="rgba(79,216,255,0.0)" />
+        </radialGradient>
+      </defs>
+      {/* translucent ground plate */}
+      <circle cx={0} cy={0} r={R} fill="url(#radarGround)" />
+      {/* range rings + labels */}
+      {rings.map((mi, i) => {
+        const rr = (mi / scaleMi) * R;
+        return (
+          <g key={i}>
+            <circle cx={0} cy={0} r={rr} fill="none" stroke={FAINT} strokeWidth={1} />
+            <text
+              x={3}
+              y={-rr + 1}
+              fontSize={6.5}
+              fill={DIM}
+              opacity={0.7}
+              fontFamily="ui-monospace, Menlo, monospace"
+            >
+              {fmtMi(mi)}
+            </text>
+          </g>
+        );
+      })}
       {/* cross-hairs */}
       <line x1={-R} y1={0} x2={R} y2={0} stroke={FAINT} strokeWidth={1} />
       <line x1={0} y1={-R} x2={0} y2={R} stroke={FAINT} strokeWidth={1} />
@@ -41,13 +90,11 @@ export function OverheadRadar({ blips }: { blips: RadarBlip[] }) {
       {(['N', 'E', 'S', 'W'] as const).map((c) => {
         const deg = COMPASS_DEG[c]!;
         const a = deg * (Math.PI / 180);
-        const lx = Math.sin(a) * (R + 8);
-        const ly = -Math.cos(a) * (R + 8);
         return (
           <text
             key={c}
-            x={lx}
-            y={ly}
+            x={Math.sin(a) * (R + 9)}
+            y={-Math.cos(a) * (R + 9)}
             fontSize={8}
             fill={DIM}
             textAnchor="middle"
@@ -58,18 +105,27 @@ export function OverheadRadar({ blips }: { blips: RadarBlip[] }) {
           </text>
         );
       })}
-      {/* you */}
-      <circle cx={0} cy={0} r={2} fill={CYAN} />
       {/* aircraft */}
-      {blips.map((b, i) => {
-        const deg = COMPASS_DEG[b.bearing];
-        if (deg === undefined) return null;
-        const a = deg * (Math.PI / 180);
-        const r = (Math.min(b.distMi, MAX_MI) / MAX_MI) * R;
-        const x = Math.sin(a) * r;
-        const y = -Math.cos(a) * r;
-        return <circle key={i} cx={x} cy={y} r={2.6} fill={b.mil ? AMBER : CYAN} opacity={0.95} />;
+      {pts.map((p, i) => {
+        const { x, y } = toXY(p.e, p.n);
+        return <circle key={i} cx={x} cy={y} r={2.6} fill={p.mil ? AMBER : CYAN} opacity={0.95} />;
       })}
+      {/* home marker (ringed dot, distinct from blips) */}
+      <circle cx={0} cy={0} r={3.4} fill="none" stroke="#ffd27f" strokeWidth={1.1} />
+      <circle cx={0} cy={0} r={1.3} fill="#ffd27f" />
+      {homeLabel && (
+        <text
+          x={0}
+          y={9}
+          fontSize={6.5}
+          fill="#ffd27f"
+          opacity={0.85}
+          textAnchor="middle"
+          fontFamily="ui-monospace, Menlo, monospace"
+        >
+          {homeLabel}
+        </text>
+      )}
     </svg>
   );
 }

@@ -93,7 +93,7 @@ interface Summary {
   }>;
   briefing?: { date: string; quiet: boolean; lead: string; changed: string | null; signoff: string | null } | null;
   integrity?: Array<{ name: string; verdict: string; pct: number | null }>;
-  overhead?: { count: number; milCount: number; tops: Array<{ callsign: string | null; altFt: number | null; distMi: number; bearing: string; mil: boolean; typeDesc: string | null }> };
+  overhead?: { count: number; milCount: number; tops: Array<{ callsign: string | null; altFt: number | null; distMi: number; bearing: string; dxMi?: number; dyMi?: number; mil: boolean; typeDesc: string | null }> };
   shadowS1Last24h?: number;
   airport?: { code: string; type: string; reason: string; detail: string } | null;
 }
@@ -370,14 +370,24 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
             {sum.overhead.tops.length > 0 && (
               <div style={{ display: 'flex', justifyContent: 'center', margin: '4px 0 2px' }}>
                 <OverheadRadar
-                  blips={sum.overhead.tops.map((t) => ({ distMi: t.distMi, bearing: t.bearing, mil: t.mil }))}
+                  blips={sum.overhead.tops.map((t) => ({
+                    distMi: t.distMi,
+                    bearing: t.bearing,
+                    dxMi: t.dxMi,
+                    dyMi: t.dyMi,
+                    mil: t.mil,
+                  }))}
+                  homeLabel={label.replace(/^near\s+/i, '').split(',')[0] || undefined}
                 />
               </div>
             )}
             <div>
-              {sum.overhead.count} aircraft within 150 mi
+              {sum.overhead.count} within 150 mi
               {sum.overhead.tops.length > 0 && (
-                <span style={{ opacity: 0.5 }}> · nearest {sum.overhead.tops.length} plotted</span>
+                <span style={{ opacity: 0.5 }}>
+                  {' '}· nearest {sum.overhead.tops.length} ≤{' '}
+                  {Math.max(...sum.overhead.tops.map((t) => t.distMi))} mi
+                </span>
               )}
             </div>
             {sum.overhead.tops.map((t, i) => {
