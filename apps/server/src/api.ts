@@ -93,13 +93,24 @@ export function registerApi(
       }
     });
 
-    scope.get<{ Querystring: { limit?: string; severity?: string } }>(
+    scope.get<{ Querystring: { limit?: string; severity?: string; day?: string } }>(
       '/api/signals',
       async (req) => {
         const limit = Math.min(Number(req.query.limit ?? 50) || 50, 200);
         const severity = req.query.severity;
-        const where = severity ? 'WHERE s.severity = $2' : '';
-        const params: unknown[] = severity ? [limit, severity] : [limit];
+        // Journal drill-in: one local day (briefing timezone), newest first.
+        const day = /^\d{4}-\d{2}-\d{2}$/.test(req.query.day ?? '') ? req.query.day : undefined;
+        const conds: string[] = [];
+        const params: unknown[] = [limit];
+        if (severity) {
+          params.push(severity);
+          conds.push(`s.severity = $${params.length}`);
+        }
+        if (day) {
+          params.push(env.briefingTimezone, day);
+          conds.push(`(s.ts AT TIME ZONE $${params.length - 1})::date = $${params.length}::date`);
+        }
+        const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
         const { rows } = await pool.query(
           `SELECT s.payload,
                   CASE WHEN a.signal_id IS NULL THEN NULL ELSE

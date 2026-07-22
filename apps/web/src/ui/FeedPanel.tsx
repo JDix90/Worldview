@@ -8,6 +8,7 @@ import type { Severity, Signal } from '@orrery/shared';
 import { apiGet } from '../feed/api';
 import { DEBUG_UI } from '../prefs';
 import { GateReview } from './GateReview';
+import { Journal } from './Journal';
 import { Chip, CHIP_DIM } from './Chip';
 
 interface FeedSignal extends Signal {
@@ -84,7 +85,7 @@ function Sparkline({ points }: { points: Array<{ ts: number; total: number }> })
 /** Renders briefing markdown just enough for the feed: `**bold**` becomes
  *  bold, `#`-headers become cyan section lines — raw asterisks read as a
  *  rendering bug to a first-time viewer (fresh-eyes review, 2026-07-22). */
-function MarkdownLite({ text }: { text: string }) {
+export function MarkdownLite({ text }: { text: string }) {
   return (
     <>
       {text.split('\n').map((line, i) => {
@@ -115,7 +116,7 @@ interface FeedPanelProps {
 }
 
 export function FeedPanel({ open, onOpenChange, chipVisible, bottom }: FeedPanelProps) {
-  const [tab, setTab] = useState<'signals' | 'briefing'>('signals');
+  const [tab, setTab] = useState<'signals' | 'briefing' | 'journal'>('signals');
   const [gateOpen, setGateOpen] = useState(false);
   const [signals, setSignals] = useState<FeedSignal[]>([]);
   const [briefing, setBriefing] = useState<Briefing | null>(null);
@@ -187,7 +188,7 @@ export function FeedPanel({ open, onOpenChange, chipVisible, bottom }: FeedPanel
   return (
     <div style={panel}>
       <div style={{ display: 'flex', gap: 14, marginBottom: 10, alignItems: 'baseline' }}>
-        {(['signals', 'briefing'] as const).map((t) => (
+        {(['signals', 'briefing', 'journal'] as const).map((t) => (
           <span
             key={t}
             onClick={() => setTab(t)}
@@ -258,6 +259,8 @@ export function FeedPanel({ open, onOpenChange, chipVisible, bottom }: FeedPanel
           ))}
         </div>
       )}
+
+      {tab === 'journal' && <Journal />}
 
       {tab === 'briefing' && (
         <div>
