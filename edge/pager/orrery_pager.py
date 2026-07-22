@@ -469,6 +469,7 @@ PAGES = ["NOW", "BRIEFING", "CRIME", "OVERHEAD", "NEARBY SIGNALS",
 # Per-page dwell (seconds), owner-set. Replaces the old single CAROUSEL_SEC
 # with a 2.5x/0.8x multiplier — pages differ too much in reading time.
 DWELL_SEC = {
+    "RADAR": 8,
     "NOW": 10, "BRIEFING": 12, "CRIME": 12, "OVERHEAD": 12,
     "NEARBY SIGNALS": 8, "HAZARDS": 6, "SKY": 6, "SPACE": 6, "SYSTEM": 6,
 }
@@ -486,8 +487,51 @@ def _ticker_index(n: int, now: Optional[float] = None) -> int:
     return int((now if now is not None else time.time()) / TICKER_SEC) % n
 
 
+# ── Attention-aware rotation (Phase 1 B1, DECISIONS #120) ────────────────
+# The carousel was strictly periodic: a Tornado Warning got the same 6 s slot
+# in the same position as a quiet HAZARDS page. These rules make the panel
+# attend to what matters. All pure — App applies hysteresis and fail-static.
+def _page_is_red(page: str, s: dict, c: dict, sysinfo: dict) -> bool:
+    """Would a duty officer put this page first right now?"""
+    if page == "NOW":
+        return overall_status(s) == "red"
+    if page == "HAZARDS":
+        if weather_status(c.get("alerts", [])) == "red":
+            return True
+        ap = s.get("airport") or {}
+        return ap.get("type") in ("ground-stop", "closure")
+    if page == "NEARBY SIGNALS":
+        return any(x.get("severity") == "S1" for x in s.get("signals") or [])
+    if page == "SYSTEM":
+        return str(sysinfo.get("power", "AC")).upper() not in ("AC", "", "—", "NONE")
+    return False
+
+
+def compute_rotation(s: dict, c: dict, sysinfo: dict, hour_local: int) -> tuple:
+    """(pages, promoted) — the live rotation and which pages are urgent.
+
+    Rules, in order:
+      1. SKY carries tonight's sky: in rotation only 15:00–07:00.
+      2. RADAR exists only while precip is within RADAR_NEAR_MI of home,
+         slotted after NOW (rain-about-to-hit-the-house is a now-concern).
+      3. Red pages move to the front (stable order), keep their identity via
+         a red edge bar, and get 1.5× dwell (applied by the caller).
+    Any exception in the caller falls back to the static PAGES table — the
+    carousel must never die of cleverness.
+    """
+    pages = [p for p in PAGES if p != "SKY" or hour_local >= 15 or hour_local < 7]
+    radar = c.get("radar") or {}
+    if radar.get("near"):
+        pages.insert(pages.index("NOW") + 1, "RADAR")
+    promoted = tuple(p for p in pages if _page_is_red(p, s, c, sysinfo))
+    if promoted:
+        pages = list(promoted) + [p for p in pages if p not in promoted]
+    return tuple(pages), promoted
+
+
 def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
-           conditions: Optional[dict] = None, page_name: Optional[str] = None) -> Image.Image:
+           conditions: Optional[dict] = None, page_name: Optional[str] = None,
+           promoted: bool = False, n_pages: Optional[int] = None) -> Image.Image:
     img = Image.new("RGB", (L.w, L.h), BG)
     d = ImageDraw.Draw(img)
     # page_name overrides the static table: conditional pages (RADAR) exist
@@ -527,9 +571,11 @@ def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
         d.text((L.pad, L.h // 2 + 4), "with backend", font=L.lg, fill=RED)
         if summary:
             d.text((L.pad, L.h // 2 + L.line_md * 2), f"last ok {_ago(summary.stale_s)} ago", font=L.sm, fill=DIM)
-        _footer(d, page_idx, sysinfo, L)
+        _footer(d, page_idx, sysinfo, L, n_pages)
         return img
 
+    if promoted:  # the learnable grammar: first + red-barred = urgent
+        d.rectangle((0, L.header_h, 3, L.h - L.footer_h), fill=RED)
     s = summary.raw
     c = conditions or {}
     # pages driven by the conditions bundle (weather/aqi/sky/space/crime)
@@ -549,7 +595,7 @@ def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
             "OVERHEAD": _page_overhead,
             "SYSTEM": _page_system,
         }[page](d, s, sysinfo, summary, L)
-    _footer(d, page_idx, sysinfo, L)
+    _footer(d, page_idx, sysinfo, L, n_pages)
     return img
 
 
@@ -681,10 +727,11 @@ def _page_space(d, _s: dict, c: dict, L: Layout) -> None:
         d.text((L.pad, y), "aurora not visible at your latitude", font=L.sm, fill=DIM)
 
 
-def _footer(d: ImageDraw.ImageDraw, page_idx: int, sysinfo: dict, L: Layout) -> None:
+def _footer(d: ImageDraw.ImageDraw, page_idx: int, sysinfo: dict, L: Layout,
+            n_pages: Optional[int] = None) -> None:
     y = L.h - L.footer_h
     d.rectangle((0, y, L.w, L.h), fill=PANEL)
-    for i in range(len(PAGES)):
+    for i in range(n_pages if n_pages is not None else len(PAGES)):
         cx = L.pad + 2 + i * 14
         col = CYAN if i == page_idx else DIM
         d.ellipse((cx, y + L.footer_h // 3, cx + 6, y + L.footer_h // 3 + 6),
@@ -1552,6 +1599,9 @@ class App:
     backend: Backend
     layout: Layout
     page_idx: int = 0
+    rotation: tuple = tuple(PAGES)
+    promoted: tuple = ()
+    _rot_candidate: tuple = ()   # (pages, promoted) seen once, awaiting confirm
     summary: Optional[Summary] = None
     _dirty: bool = True
     # screen-sleep state
@@ -1566,7 +1616,33 @@ class App:
     _ctl_mtime: float = 0.0
 
     def next_page(self) -> None:
-        self.page_idx = (self.page_idx + 1) % len(PAGES)
+        self.page_idx = (self.page_idx + 1) % len(self.rotation)
+        self._dirty = True
+
+    def _update_rotation(self) -> None:
+        """Adopt a new rotation only after two consecutive polls agree —
+        a value hovering at a threshold must not ping-pong the carousel.
+        Any error falls back to the static table (fail-static by design)."""
+        try:
+            hour = time.localtime().tm_hour
+            new = compute_rotation(
+                self.summary.raw if (self.summary and self.summary.ok) else {},
+                self.conditions or {}, self.sysinfo(), hour)
+        except Exception as e:
+            print(f"[display] rotation rules failed, static fallback: {e}", file=sys.stderr)
+            new = (tuple(PAGES), ())
+        current = (self.rotation, self.promoted)
+        if new == current:
+            self._rot_candidate = ()
+            return
+        if new != self._rot_candidate:
+            self._rot_candidate = new   # first sighting — wait for confirmation
+            return
+        # confirmed twice: adopt, keeping the currently-shown page if possible
+        shown = self.rotation[self.page_idx] if self.page_idx < len(self.rotation) else None
+        self.rotation, self.promoted = new
+        self._rot_candidate = ()
+        self.page_idx = self.rotation.index(shown) if shown in self.rotation else 0
         self._dirty = True
 
     def refresh(self) -> None:
@@ -1581,6 +1657,7 @@ class App:
             print(f"[display] poll failed: {e}", file=sys.stderr)
         self._fetch_server_mode()
         self._refresh_conditions()
+        self._update_rotation()
         self._dirty = True
 
     def _refresh_conditions(self) -> None:
@@ -1698,7 +1775,10 @@ class App:
         return info
 
     def draw(self) -> None:
-        img = render(self.summary, self.page_idx, self.sysinfo(), self.layout, self.conditions)
+        page = self.rotation[self.page_idx % len(self.rotation)]
+        img = render(self.summary, self.page_idx, self.sysinfo(), self.layout, self.conditions,
+                     page_name=page, promoted=page in self.promoted,
+                     n_pages=len(self.rotation))
         self.backend.blit(img)
         led = STATUS_RGB["stale"]
         if self.summary and self.summary.ok:
@@ -1742,7 +1822,10 @@ class App:
                 continue
             # per-page dwell (DECISIONS #115); CAROUSEL_SEC=0 still disables
             # auto-advance entirely, and scales the table when set non-default.
-            dwell = DWELL_SEC.get(PAGES[self.page_idx], 8) if CAROUSEL_SEC > 0 else 0
+            page_now = self.rotation[self.page_idx % len(self.rotation)]
+            dwell = DWELL_SEC.get(page_now, 8) if CAROUSEL_SEC > 0 else 0
+            if page_now in self.promoted:
+                dwell *= 1.5  # urgent pages linger
             if dwell > 0 and time.time() - self._last_input >= dwell:
                 self._last_input = time.time()
                 self.next_page()
@@ -1842,6 +1925,52 @@ def selftest() -> int:
     except Exception as e:
         fails += 1
         print(f"  FAIL  sky module: {e}")
+
+    # ── attention-aware rotation (Phase 1 B1) ────────────────────────────
+    AC = {"power": "AC"}
+    BATT = {"power": "battery", "battery_pct": 80}
+    quiet_s, quiet_c = {"feed": {"live": True}}, {}
+    def rot(s_=None, c_=None, sys_=None, hour=12):
+        return compute_rotation(s_ or quiet_s, c_ or quiet_c, sys_ or AC, hour)
+
+    pages, prom = rot(hour=12)
+    ok = "SKY" not in pages and "RADAR" not in pages and not prom and pages[0] == "NOW"
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  quiet noon: no SKY, no RADAR, nothing promoted")
+
+    pages, prom = rot(hour=20)
+    ok = "SKY" in pages
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  evening: SKY joins the rotation")
+
+    pages, prom = rot(c_={"radar": {"near": True}}, hour=12)
+    ok = "RADAR" in pages and pages[pages.index("NOW") + 1] == "RADAR"
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  precip near: RADAR inserted after NOW")
+
+    pages, prom = rot(c_={"alerts": [{"event": "Tornado Warning", "severity": "Extreme"}]}, hour=12)
+    ok = pages[0] == "HAZARDS" and "HAZARDS" in prom
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  tornado: HAZARDS promoted to front")
+
+    pages, prom = rot(sys_=BATT, hour=12)
+    ok = pages[0] == "SYSTEM" and "SYSTEM" in prom
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  on battery: SYSTEM promoted to front")
+
+    pages, prom = rot(s_={"feed": {"live": True}, "signals": [{"severity": "S1"}]}, hour=12)
+    ok = set(prom) == {"NOW", "NEARBY SIGNALS"} and pages[0] in prom
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  live S1: NOW + NEARBY SIGNALS co-promoted")
+
+    pages, prom = rot(s_={"feed": {"live": True}, "signals": [{"severity": "S1"}]},
+                      c_={"alerts": [{"event": "Tornado Warning", "severity": "Extreme"}],
+                          "radar": {"near": True}}, sys_=BATT, hour=20)
+    ok = (set(prom) == {"NOW", "HAZARDS", "NEARBY SIGNALS", "SYSTEM"}
+          and all(p in prom for p in pages[:4])
+          and "RADAR" in pages and "SKY" in pages and len(pages) == len(set(pages)) == 10)
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  everything at once: 4 promoted lead, 10 unique pages")
     print(f"selftest: {'ALL PASS' if fails == 0 else f'{fails} FAILURES'}")
     return fails
 
@@ -1954,12 +2083,19 @@ def main() -> None:
                 fetched_at=time.time() - (0 if fx["ok"] else 500),
                 ok=fx["ok"],
             )
-            page_names = list(PAGES) + (["RADAR"] if fx["cond"].get("radar") else [])
-            for i, pname in enumerate(page_names):
-                fname_png = pname.lower().replace(" ", "_") + ".png"
-                render(summ, min(i, len(PAGES) - 1), fx["sysinfo"], L, fx["cond"],
-                       page_name=pname).save(os.path.join(outdir, fname_png))
+            # Fixtures render the rotation the rules would actually produce
+            # (hour fixed at 20:00 so SKY is exercised too) — the mock output
+            # IS the acceptance evidence for promotion/insertion/ordering.
+            pages, prom = compute_rotation(
+                data if fx["ok"] else {}, fx["cond"], fx["sysinfo"], 20)
+            for i, pname in enumerate(pages):
+                fname_png = f"{i:02d}_" + pname.lower().replace(" ", "_") + ".png"
+                render(summ, i, fx["sysinfo"], L, fx["cond"], page_name=pname,
+                       promoted=pname in prom, n_pages=len(pages)).save(
+                    os.path.join(outdir, fname_png))
                 total += 1
+            print(f"  {fname}: rotation = {' > '.join(pages)}"
+                  + (f"  [promoted: {', '.join(prom)}]" if prom else ""))
         print(f"wrote {total} PNGs across {len(names)} fixture(s) to {args.mock} at {w}x{h}")
         return
 
