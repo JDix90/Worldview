@@ -1711,6 +1711,52 @@ def _wifi_label() -> str:
         return "—"
 
 
+def _mock_fixtures(data: dict) -> dict:
+    """Named world-states for off-device rendering (`--fixture`).
+
+    The pager renders identically off-device by design, and that is the only
+    honest way to check panel behaviour: a state like "on battery at 12%" or
+    "tornado warning" cannot be summoned on demand from the real world, and
+    waiting for one to occur means shipping unverified. Rendering real pages
+    off-device is what caught *two* independent causes of the briefing
+    truncation (#118) when fixing either alone would have looked like a fix.
+
+    One live crime fetch is shared across every fixture; the weather/sky
+    values are synthetic so the rendering is deterministic.
+    """
+    ac = {"battery_pct": 82, "wifi": "home", "clock": "07:14", "power": "AC"}
+    on_batt = dict(ac, power="battery", battery_pct=82)
+    critical = dict(ac, power="battery", battery_pct=12)
+
+    calm = {"temp": 88, "feels": 85, "cond": "partly cloudy", "wind": "9 mph SSW",
+            "hi": 96, "lo": 68, "sunrise": "05:42", "sunset": "20:27",
+            "aqi": 76, "pm25": 4.5, "alerts": [],
+            "iss": {"rise_ms": (time.time() + 5400) * 1000, "rise_dir": "NW",
+                    "max_el": 45, "duration_s": 420, "bright": True},
+            "moon": {"name": "waxing gibbous", "illumination": 0.57},
+            "kp_max": 3.7, "aurora": "none"}
+    home = data.get("home") or {}
+    if home.get("lat") is not None:
+        calm["crime"] = fetch_crime(home["lat"], home["lon"])
+
+    alerts = dict(calm, alerts=[
+        {"event": "Air Quality Alert", "severity": "Unknown", "until": "16:00"},
+        {"event": "Heat Advisory", "severity": "Moderate", "until": "21:00"}])
+    tornado = dict(calm, cond="thunderstorm", alerts=[
+        {"event": "Tornado Warning", "severity": "Extreme", "until": "19:45"}])
+    aurora = dict(calm, kp_max=7.2, aurora="overhead")
+
+    return {
+        "calm":     {"sysinfo": ac,       "cond": calm,    "ok": True},
+        "alerts":   {"sysinfo": ac,       "cond": alerts,  "ok": True},
+        "tornado":  {"sysinfo": ac,       "cond": tornado, "ok": True},
+        "battery":  {"sysinfo": on_batt,  "cond": calm,    "ok": True},
+        "critical": {"sysinfo": critical, "cond": calm,    "ok": True},
+        "aurora":   {"sysinfo": ac,       "cond": aurora,  "ok": True},
+        "offline":  {"sysinfo": ac,       "cond": calm,    "ok": False},
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--mock", metavar="DIR", help="render frames to PNGs instead of hardware")
@@ -1723,6 +1769,10 @@ def main() -> None:
                     help="XPT2046 touch device for the fb route")
     ap.add_argument("--selftest", action="store_true",
                     help="run the sleep-policy test cases and exit")
+    ap.add_argument("--fixture", metavar="NAME",
+                    help="with --shot-all: render one named world-state "
+                         "(calm, alerts, tornado, battery, critical, aurora, offline); "
+                         "default renders every fixture into its own subdirectory")
     args = ap.parse_args()
 
     if args.selftest:
@@ -1738,35 +1788,27 @@ def main() -> None:
         w, h = (int(v) for v in (args.size or "240x280").split("x"))
         L = make_layout(w, h)
         data = json.load(open(args.shot_all))
-        summ = Summary(raw=data, fetched_at=time.time(), ok=True)
-        sysinfo = {"battery_pct": 82, "wifi": "home", "clock": "07:14", "power": "AC"}
-        cond_calm = {"temp": 88, "feels": 85, "cond": "partly cloudy", "wind": "9 mph SSW",
-                     "hi": 96, "lo": 68, "sunrise": "05:42", "sunset": "20:27",
-                     "aqi": 76, "pm25": 4.5, "alerts": []}
-        cond_alerts = dict(cond_calm, alerts=[
-            {"event": "Air Quality Alert", "severity": "Unknown", "until": "16:00"},
-            {"event": "Heat Advisory", "severity": "Moderate", "until": "21:00"}])
-        cond_tornado = dict(cond_calm, cond="thunderstorm", alerts=[
-            {"event": "Tornado Warning", "severity": "Extreme", "until": "19:45"}])
-        # SKY / SPACE fixtures so those pages render something in the mock
-        cond_alerts.update({
-            "iss": {"rise_ms": (time.time() + 5400) * 1000, "rise_dir": "NW",
-                    "max_el": 45, "duration_s": 420, "bright": True},
-            "moon": {"name": "waxing gibbous", "illumination": 0.57},
-            "kp_max": 3.7, "aurora": "none",
-        })
-        # live crime + basemap pull for the CRIME page mock, at the real home
-        _home = data.get("home") or {}
-        if _home.get("lat") is not None:
-            cond_alerts["crime"] = fetch_crime(_home["lat"], _home["lon"])
-        for i in range(len(PAGES)):
-            name = PAGES[i].lower().replace(" ", "_")
-            render(summ, i, sysinfo, L, cond_alerts).save(os.path.join(args.mock, f"{name}.png"))
-        render(summ, 0, sysinfo, L, cond_calm).save(os.path.join(args.mock, "today_calm.png"))
-        render(summ, 0, sysinfo, L, cond_tornado).save(os.path.join(args.mock, "today_tornado.png"))
-        render(Summary(raw={}, fetched_at=time.time() - 500, ok=False), 0, sysinfo, L).save(
-            os.path.join(args.mock, "no_contact.png"))
-        print(f"wrote {len(PAGES) + 1} page PNGs to {args.mock} at {w}x{h}")
+        fixtures = _mock_fixtures(data)
+        if args.fixture and args.fixture not in fixtures:
+            print(f"unknown fixture {args.fixture!r}; have: {', '.join(fixtures)}", file=sys.stderr)
+            sys.exit(2)
+        names = [args.fixture] if args.fixture else list(fixtures)
+        total = 0
+        for fname in names:
+            fx = fixtures[fname]
+            outdir = os.path.join(args.mock, fname)
+            os.makedirs(outdir, exist_ok=True)
+            summ = Summary(
+                raw=data if fx["ok"] else {},
+                fetched_at=time.time() - (0 if fx["ok"] else 500),
+                ok=fx["ok"],
+            )
+            for i in range(len(PAGES)):
+                page = PAGES[i].lower().replace(" ", "_")
+                render(summ, i, fx["sysinfo"], L, fx["cond"]).save(
+                    os.path.join(outdir, f"{page}.png"))
+                total += 1
+        print(f"wrote {total} PNGs across {len(names)} fixture(s) to {args.mock} at {w}x{h}")
         return
 
     if args.fb:
