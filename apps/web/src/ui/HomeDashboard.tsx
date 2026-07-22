@@ -12,6 +12,7 @@ import { fetchSpaceWeather, auroraVerdict, type SpaceWeather } from '../sky/spac
 import { nextIssPasses, type Pass } from '../sky/passes';
 import { sublunarPoint } from '../globe/lunar';
 import { Chip } from './Chip';
+import { OverheadRadar, MoonDisc, AqiBar } from './dashViz';
 
 const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 
@@ -366,7 +367,19 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
       >
         {sum?.overhead ? (
           <>
-            <div>{sum.overhead.count} aircraft within 150 mi</div>
+            {sum.overhead.tops.length > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'center', margin: '4px 0 2px' }}>
+                <OverheadRadar
+                  blips={sum.overhead.tops.map((t) => ({ distMi: t.distMi, bearing: t.bearing, mil: t.mil }))}
+                />
+              </div>
+            )}
+            <div>
+              {sum.overhead.count} aircraft within 150 mi
+              {sum.overhead.tops.length > 0 && (
+                <span style={{ opacity: 0.5 }}> · nearest {sum.overhead.tops.length} plotted</span>
+              )}
+            </div>
             {sum.overhead.tops.map((t, i) => {
               const cs = t.callsign?.trim();
               const route = cs ? routes[cs] : undefined;
@@ -441,6 +454,7 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
               <div>
                 AQI <span style={{ color }}>{cond.aqi.us} — {word}</span>
                 <span style={{ opacity: 0.55 }}> · PM2.5 {cond.aqi.pm25} µg/m³</span>
+                <AqiBar aqi={cond.aqi.us} />
               </div>
             );
           })()
@@ -493,8 +507,11 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
         {(() => {
           const m = sublunarPoint(new Date());
           return (
-            <div style={{ opacity: 0.85 }}>
-              moon: {m.phaseName.toLowerCase()} · {Math.round(m.illumination * 100)}% lit
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: 0.85, marginTop: 2 }}>
+              <MoonDisc illumination={m.illumination} waxing={m.waxing} />
+              <span>
+                moon: {m.phaseName.toLowerCase()} · {Math.round(m.illumination * 100)}% lit
+              </span>
             </div>
           );
         })()}
