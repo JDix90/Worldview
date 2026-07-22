@@ -424,6 +424,84 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
         )}
       </Section>
 
+      {sum?.briefing && (
+        <Section
+          title="BRIEFING"
+          right={
+            <span style={{ fontSize: 10 }}>
+              <span style={{ opacity: 0.4 }}>{String(sum.briefing.date).slice(0, 10)} · </span>
+              <span style={{ color: sum.briefing.quiet ? DIM : AMBER }}>
+                {sum.briefing.quiet ? 'QUIET' : 'ACTIVE'}
+              </span>
+            </span>
+          }
+        >
+          <div style={{ opacity: 0.9 }}>{sum.briefing.lead}</div>
+          {sum.briefing.changed && (
+            <div
+              style={{
+                opacity: 0.6,
+                marginTop: 2,
+                display: '-webkit-box',
+                WebkitLineClamp: 3,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+              }}
+            >
+              <span style={{ color: CYAN, opacity: 0.7 }}>changed: </span>
+              {sum.briefing.changed}
+            </div>
+          )}
+          {sum.briefing.signoff && (
+            <div style={{ marginTop: 4, fontStyle: 'italic', color: CYAN, opacity: 0.7 }}>
+              “{sum.briefing.signoff}”
+            </div>
+          )}
+        </Section>
+      )}
+
+      {/* CRIME — promoted out of the old LOCAL CONDITIONS junk drawer to its
+          own section; the heat preview IS the button (design review #114). */}
+      {crimeSource && (
+        <Section
+          title="CRIME"
+          right={
+            Array.isArray(crime) ? (
+              <span style={{ opacity: 0.6 }}>{crime.length} · {CRIME_DAYS}d</span>
+            ) : undefined
+          }
+        >
+          {crime === 'unavailable' ? (
+            <div style={{ opacity: 0.45 }}>crime data unavailable</div>
+          ) : !Array.isArray(crime) ? (
+            <div style={{ opacity: 0.5 }}>loading…</div>
+          ) : (
+            <div
+              onClick={() => setCrimeOpen(true)}
+              title="Open the full city crime map"
+              style={{
+                cursor: 'pointer',
+                border: '1px solid rgba(79,216,255,0.3)',
+                borderRadius: 3,
+                padding: 3,
+                marginTop: 2,
+              }}
+            >
+              {sum?.home && (
+                <CrimeHeat points={crime} home={sum.home} width={PANEL_INNER_W - 8} height={88} />
+              )}
+              <div style={{ display: 'flex', alignItems: 'baseline', marginTop: 3, padding: '0 2px 1px' }}>
+                <span style={{ opacity: 0.6, fontSize: 10 }}>
+                  {crime.length} reported near you · {CRIME_DAYS}d
+                </span>
+                <span style={{ flex: 1 }} />
+                <span style={{ color: CYAN }}>open full map ›</span>
+              </div>
+            </div>
+          )}
+        </Section>
+      )}
+
       <Section
         title="OVERHEAD"
         right={
@@ -476,48 +554,6 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
           <div style={{ opacity: 0.5 }}>loading…</div>
         )}
       </Section>
-
-      {/* CRIME — promoted out of the old LOCAL CONDITIONS junk drawer to its
-          own section; the heat preview IS the button (design review #114). */}
-      {crimeSource && (
-        <Section
-          title="CRIME"
-          right={
-            Array.isArray(crime) ? (
-              <span style={{ opacity: 0.6 }}>{crime.length} · {CRIME_DAYS}d</span>
-            ) : undefined
-          }
-        >
-          {crime === 'unavailable' ? (
-            <div style={{ opacity: 0.45 }}>crime data unavailable</div>
-          ) : !Array.isArray(crime) ? (
-            <div style={{ opacity: 0.5 }}>loading…</div>
-          ) : (
-            <div
-              onClick={() => setCrimeOpen(true)}
-              title="Open the full city crime map"
-              style={{
-                cursor: 'pointer',
-                border: '1px solid rgba(79,216,255,0.3)',
-                borderRadius: 3,
-                padding: 3,
-                marginTop: 2,
-              }}
-            >
-              {sum?.home && (
-                <CrimeHeat points={crime} home={sum.home} width={PANEL_INNER_W - 8} height={88} />
-              )}
-              <div style={{ display: 'flex', alignItems: 'baseline', marginTop: 3, padding: '0 2px 1px' }}>
-                <span style={{ opacity: 0.6, fontSize: 10 }}>
-                  {crime.length} reported near you · {CRIME_DAYS}d
-                </span>
-                <span style={{ flex: 1 }} />
-                <span style={{ color: CYAN }}>open full map ›</span>
-              </div>
-            </div>
-          )}
-        </Section>
-      )}
 
       <Section title="NEARBY SIGNALS">
         {near.length === 0 ? (
@@ -665,42 +701,6 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
               </div>
             );
           })()}
-        </Section>
-      )}
-
-      {sum?.briefing && (
-        <Section
-          title="BRIEFING"
-          right={
-            <span style={{ fontSize: 10 }}>
-              <span style={{ opacity: 0.4 }}>{String(sum.briefing.date).slice(0, 10)} · </span>
-              <span style={{ color: sum.briefing.quiet ? DIM : AMBER }}>
-                {sum.briefing.quiet ? 'QUIET' : 'ACTIVE'}
-              </span>
-            </span>
-          }
-        >
-          <div style={{ opacity: 0.9 }}>{sum.briefing.lead}</div>
-          {sum.briefing.changed && (
-            <div
-              style={{
-                opacity: 0.6,
-                marginTop: 2,
-                display: '-webkit-box',
-                WebkitLineClamp: 3,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-              }}
-            >
-              <span style={{ color: CYAN, opacity: 0.7 }}>changed: </span>
-              {sum.briefing.changed}
-            </div>
-          )}
-          {sum.briefing.signoff && (
-            <div style={{ marginTop: 4, fontStyle: 'italic', color: CYAN, opacity: 0.7 }}>
-              “{sum.briefing.signoff}”
-            </div>
-          )}
         </Section>
       )}
 

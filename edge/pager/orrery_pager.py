@@ -392,12 +392,12 @@ def fetch_crime(lat: float, lon: float) -> dict:
             _CRIME_QUERY_URL,
             params={
                 "where": f"REPORTED_DATE >= DATE '{since}' AND IS_CRIME = 1",
-                "outFields": "OFFENSE_CATEGORY_ID",
+                "outFields": "OFFENSE_CATEGORY_ID,OFFENSE_TYPE_ID,INCIDENT_ADDRESS,REPORTED_DATE",
                 "geometry": bbox, "geometryType": "esriGeometryEnvelope",
                 "inSR": "4326", "spatialRel": "esriSpatialRelIntersects",
                 "resultRecordCount": "2000", "f": "geojson",
             },
-            timeout=10,
+            timeout=25,  # ArcGIS is occasionally slow on the wider outFields
         )
         r.raise_for_status()
         inc = []
@@ -406,8 +406,14 @@ def fetch_crime(lat: float, lon: float) -> dict:
             c = g.get("coordinates")
             if not c or len(c) < 2:
                 continue
-            cat = (f.get("properties") or {}).get("OFFENSE_CATEGORY_ID", "")
-            inc.append({"lon": c[0], "lat": c[1], "group": _crime_group(cat)})
+            p = f.get("properties") or {}
+            cat = p.get("OFFENSE_CATEGORY_ID", "")
+            inc.append({
+                "lon": c[0], "lat": c[1], "group": _crime_group(cat),
+                "type": p.get("OFFENSE_TYPE_ID") or cat,
+                "address": p.get("INCIDENT_ADDRESS") or "",
+                "ts": p.get("REPORTED_DATE"),
+            })
         return {"covered": True, "incidents": inc, "n": len(inc)}
     except Exception as e:
         print(f"[display] crime fetch failed: {e}", file=sys.stderr)
@@ -450,7 +456,30 @@ def _ago(sec: int) -> str:
 # ─────────────────────────── page rendering ───────────────────────────
 # Living-room lineup (2026-07-21): TODAY (weather/alerts) leads; instrument
 # vitals moved to SYSTEM; GPS jamming left the Pi entirely (browser only).
-PAGES = ["TODAY", "SIGNALS", "BRIEFING", "LOCAL", "CRIME", "SYSTEM"]
+# One information architecture with the browser dashboard (DECISIONS #115):
+# same sections, same order. SYSTEM is panel-only (instrument vitals) and
+# rides last. Full cycle ≈ 78 s at the dwell times below.
+PAGES = ["NOW", "BRIEFING", "CRIME", "OVERHEAD", "NEARBY SIGNALS",
+         "HAZARDS", "SKY", "SPACE", "SYSTEM"]
+
+# Per-page dwell (seconds), owner-set. Replaces the old single CAROUSEL_SEC
+# with a 2.5x/0.8x multiplier — pages differ too much in reading time.
+DWELL_SEC = {
+    "NOW": 10, "BRIEFING": 12, "CRIME": 12, "OVERHEAD": 12,
+    "NEARBY SIGNALS": 8, "HAZARDS": 6, "SKY": 6, "SPACE": 6, "SYSTEM": 6,
+}
+
+# Ticker: one item at a time, swapped every TICKER_SEC. Deliberately not a
+# scrolling marquee — the render loop is event-driven (repaints only when
+# dirty), so continuous motion would mean full-frame SPI writes forever.
+TICKER_SEC = 3.0
+
+
+def _ticker_index(n: int, now: Optional[float] = None) -> int:
+    """Which item the ticker shows right now (stable across redraws)."""
+    if n <= 0:
+        return 0
+    return int((now if now is not None else time.time()) / TICKER_SEC) % n
 
 
 def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
@@ -484,24 +513,31 @@ def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
         return img
 
     s = summary.raw
-    if page == "TODAY":
-        _page_today(d, s, conditions or {}, L)
-    elif page == "CRIME":
-        # like TODAY, driven by the conditions bundle (holds fetched crime)
-        _page_crime(d, s, conditions or {}, L)
+    c = conditions or {}
+    # pages driven by the conditions bundle (weather/aqi/sky/space/crime)
+    if page in ("NOW", "CRIME", "HAZARDS", "SKY", "SPACE"):
+        {
+            "NOW": _page_now,
+            "CRIME": _page_crime,
+            "HAZARDS": _page_hazards,
+            "SKY": _page_sky,
+            "SPACE": _page_space,
+        }[page](d, s, c, L)
     else:
         {
-            "SIGNALS": _page_signals,
+            "NEARBY SIGNALS": _page_signals,
             "BRIEFING": _page_briefing,
-            "LOCAL": _page_local,
+            "OVERHEAD": _page_overhead,
             "SYSTEM": _page_system,
         }[page](d, s, sysinfo, summary, L)
     _footer(d, page_idx, sysinfo, L)
     return img
 
 
-def _page_today(d, s: dict, c: dict, L: Layout) -> None:
-    """The living-room glance: big weather, alerts, AQI. All fields optional."""
+def _page_now(d, s: dict, c: dict, L: Layout) -> None:
+    """The living-room glance: big weather + AQI. All fields optional.
+    Hazards / sky / space split onto their own pages (DECISIONS #115) so the
+    panel's page set matches the browser dashboard's sections."""
     y0 = L.header_h + L.pad
     temp = c.get("temp")
     # big temperature + condition
@@ -533,40 +569,16 @@ def _page_today(d, s: dict, c: dict, L: Layout) -> None:
         d.text((L.pad + d.textlength(aqi_text, font=L.md) + 10, y + 2),
                f"PM2.5 {c.get('pm25', '—')}", font=L.sm, fill=DIM)
         y += L.line_md + 8
-    # evening sky block: ISS pass + moon, shown from ~1h before sunset onward
-    def _min_of(hhmm):
-        try:
-            hh, mm = hhmm.split(":")
-            return int(hh) * 60 + int(mm)
-        except Exception:
-            return None
-    now = time.localtime()
-    now_min = now.tm_hour * 60 + now.tm_min
-    ss = _min_of(c.get("sunset", "")) if c.get("sunset") else None
-    evening = ss is not None and now_min >= ss - 60
-    if evening:
-        iss = c.get("iss")
-        if iss:
-            rise = time.localtime(iss["rise_ms"] / 1000)
-            tonight = rise.tm_yday == now.tm_yday
-            when = f"{rise.tm_hour:02d}:{rise.tm_min:02d}"
-            label = f"✦ ISS {'tonight' if tonight else 'tomorrow'} {when} · rises {iss['rise_dir']} · max {iss['max_el']}°"
-            if iss.get("bright"):
-                label += " · bright"
-            d.text((L.pad, y), label, font=L.md, fill=CYAN if iss.get("bright") else WHITE)
-            y += L.line_md + 2
-        moon = c.get("moon")
-        if moon:
-            d.text((L.pad, y), f"☾ {moon['name']} · {round(moon['illumination'] * 100)}% lit",
-                   font=L.sm, fill=DIM)
-            y += L.line_sm + 4
-    # aurora line — rare enough to always show when non-none
-    if c.get("aurora") in ("horizon", "overhead"):
-        word = "likely overhead" if c["aurora"] == "overhead" else "possible on the northern horizon"
-        d.text((L.pad, y), f"✦ aurora {word} — look north late", font=L.md,
-               fill=GREEN if c["aurora"] == "overhead" else AMBER)
-        y += L.line_md + 2
-    # home-airport delay line — exception-based like alerts (FAA via summary)
+
+
+def _page_hazards(d, s: dict, c: dict, L: Layout) -> None:
+    """Exception-based: home-airport disruption + active NWS alerts. Quiet is
+    the normal state and says so (fires are browser-only — no FIRMS source
+    here, so their absence is not reported as 'unavailable')."""
+    y = L.header_h + L.pad
+    d.text((L.pad, y), "HAZARDS", font=L.sm, fill=CYAN)
+    y += L.line_sm + 8
+    shown = False
     ap = s.get("airport")
     if ap:
         is_red = ap.get("type") in ("ground-stop", "closure")
@@ -574,19 +586,80 @@ def _page_today(d, s: dict, c: dict, L: Layout) -> None:
         if ap.get("detail"):
             line += f" · {ap['detail']}"
         d.text((L.pad, y), line, font=L.md, fill=RED if is_red else AMBER)
-        y += L.line_md + 2
-    # alerts block — omitted entirely when quiet
+        y += L.line_md + 4
+        shown = True
     for a in c.get("alerts", []):
-        sev = str(a.get("severity", "")).lower()
         is_red = weather_status([a]) == "red"
-        col = RED if is_red else AMBER
         line = f"⚠ {a.get('event', 'Alert')}"
         if a.get("until"):
             line += f" · until {a['until']}"
-        d.text((L.pad, y), line, font=L.md, fill=col)
-        y += L.line_md + 2
+        d.text((L.pad, y), line, font=L.md, fill=RED if is_red else AMBER)
+        y += L.line_md + 4
+        shown = True
         if y > L.h - L.footer_h - L.line_md:
             break
+    if not shown:
+        d.text((L.pad, y), "nothing active near you", font=L.md, fill=GREEN)
+
+
+def _page_sky(d, _s: dict, c: dict, L: Layout) -> None:
+    """Tonight's sky: next visible ISS pass + moon phase. Unconditional now
+    that it owns a page (it used to appear only after ~sunset−1h)."""
+    y = L.header_h + L.pad
+    d.text((L.pad, y), "SKY", font=L.sm, fill=CYAN)
+    y += L.line_sm + 8
+    iss = c.get("iss")
+    if iss:
+        rise = time.localtime(iss["rise_ms"] / 1000)
+        tonight = rise.tm_yday == time.localtime().tm_yday
+        when = f"{rise.tm_hour:02d}:{rise.tm_min:02d}"
+        d.text((L.pad, y), f"✦ ISS {'tonight' if tonight else 'tomorrow'} {when}",
+               font=L.lg, fill=CYAN if iss.get("bright") else WHITE)
+        y += round(L.lg.size * 1.3)
+        detail = f"rises {iss['rise_dir']} · max {iss['max_el']}°"
+        if iss.get("duration_s"):
+            detail += f" · {round(iss['duration_s'] / 60)} min"
+        if iss.get("bright"):
+            detail += " · bright"
+        d.text((L.pad, y), detail, font=L.md, fill=DIM)
+        y += L.line_md + 8
+    else:
+        d.text((L.pad, y), "no visible ISS pass in 24 h", font=L.md, fill=DIM)
+        y += L.line_md + 8
+    moon = c.get("moon")
+    if moon:
+        d.text((L.pad, y), f"☾ {moon['name']}", font=L.md, fill=WHITE)
+        y += L.line_md + 2
+        d.text((L.pad, y), f"{round(moon['illumination'] * 100)}% lit", font=L.sm, fill=DIM)
+
+
+def _page_space(d, _s: dict, c: dict, L: Layout) -> None:
+    """Space weather: Kp forecast and whether aurora is worth walking outside."""
+    y = L.header_h + L.pad
+    d.text((L.pad, y), "SPACE", font=L.sm, fill=CYAN)
+    y += L.line_sm + 8
+    kp = c.get("kp_max")
+    if kp is not None:
+        col = RED if kp >= 7 else AMBER if kp >= 5 else GREEN
+        d.text((L.pad, y), f"Kp {kp:.1f}", font=L.huge, fill=col)
+        tw = d.textlength(f"Kp {kp:.1f}", font=L.huge)
+        d.text((L.pad + tw + 12, y + round(L.huge.size * 0.35)),
+               "storm" if kp >= 5 else "quiet", font=L.md, fill=col)
+        y += round(L.huge.size * 1.25)
+        d.text((L.pad, y), "max forecast, next 24 h", font=L.sm, fill=DIM)
+        y += L.line_sm + 8
+    else:
+        d.text((L.pad, y), "no Kp forecast", font=L.md, fill=DIM)
+        y += L.line_md + 8
+    aurora = c.get("aurora")
+    if aurora in ("horizon", "overhead"):
+        word = "likely overhead" if aurora == "overhead" else "possible on the northern horizon"
+        d.text((L.pad, y), f"✦ aurora {word}", font=L.md,
+               fill=GREEN if aurora == "overhead" else AMBER)
+        y += L.line_md + 2
+        d.text((L.pad, y), "look north late", font=L.sm, fill=DIM)
+    else:
+        d.text((L.pad, y), "aurora not visible at your latitude", font=L.sm, fill=DIM)
 
 
 def _footer(d: ImageDraw.ImageDraw, page_idx: int, sysinfo: dict, L: Layout) -> None:
@@ -710,8 +783,32 @@ def _page_briefing(d, s, _sys, _summ, L: Layout) -> None:
             sy += L.line_sm
 
 
-def _page_local(d, s, _sys, _summ, L: Layout) -> None:
-    """What's overhead — the 'look up' page, anchored to the home location."""
+_COMPASS_DEG = {
+    "N": 0, "NNE": 22.5, "NE": 45, "ENE": 67.5, "E": 90, "ESE": 112.5,
+    "SE": 135, "SSE": 157.5, "S": 180, "SSW": 202.5, "SW": 225, "WSW": 247.5,
+    "W": 270, "WNW": 292.5, "NW": 315, "NNW": 337.5,
+}
+# Scope radius snaps up to one of these (mi), mirroring the browser radar.
+_RADAR_STEPS = [5, 10, 15, 25, 50, 75, 100, 150]
+
+
+def _blip_east_north(t: dict) -> tuple:
+    """East/north miles for one aircraft — exact dxMi/dyMi from the summary
+    (DECISIONS #112), else derived from the 16-point compass bearing."""
+    if isinstance(t.get("dxMi"), (int, float)) and isinstance(t.get("dyMi"), (int, float)):
+        return float(t["dxMi"]), float(t["dyMi"])
+    import math
+    deg = _COMPASS_DEG.get(str(t.get("bearing", "")), 0.0)
+    a = math.radians(deg)
+    dist = float(t.get("distMi") or 0)
+    return math.sin(a) * dist, math.cos(a) * dist
+
+
+def _page_overhead(d, s, _sys, _summ, L: Layout) -> None:
+    """What's overhead — north-up radar scope centred on home, plus a ticker
+    cycling the flight details that used to be a static list (#115)."""
+    import math
+
     y0 = L.header_h + L.pad
     over = s.get("overhead") or {}
     count = over.get("count")
@@ -720,30 +817,59 @@ def _page_local(d, s, _sys, _summ, L: Layout) -> None:
         return
     d.text((L.pad, y0), f"OVERHEAD — {count} within 150 mi", font=L.sm, fill=CYAN)
     if over.get("milCount"):
-        tag = f"{over['milCount']} MILITARY"
+        tag = f"{over['milCount']} MIL"
         d.text((L.w - L.pad - d.textlength(tag, font=L.sm), y0), tag, font=L.sm, fill=AMBER)
     tops = over.get("tops") or []
     if not tops:
         d.text((L.pad, L.h // 2 - 8), "quiet sky above you", font=L.md, fill=DIM)
         return
-    y = y0 + L.line_sm + 10
-    for t in tops:
-        ident = (t.get("callsign") or "—").strip() or "—"
-        line1 = ident
-        if t.get("typeDesc"):
-            line1 += f"  {t['typeDesc'][:26]}"
-        d.text((L.pad, y), line1, font=L.md, fill=AMBER if t.get("mil") else WHITE)
-        if t.get("mil"):
-            tw = d.textlength("MIL", font=L.sm)
-            d.text((L.w - L.pad - tw, y + 2), "MIL", font=L.sm, fill=AMBER)
-        bits = []
-        if t.get("altFt"):
-            bits.append(f"{t['altFt']:,} ft")
-        bits.append(f"{t.get('distMi', '?')}mi {t.get('bearing', '')}".strip())
-        d.text((L.pad, y + L.line_md), " · ".join(bits), font=L.sm, fill=DIM)
-        y += L.line_md + L.line_sm + 8
-        if y > L.h - L.footer_h - L.line_md:
-            break
+
+    # ── radar scope ──────────────────────────────────────────────────────
+    ticker_h = L.line_md + L.line_sm + 8
+    top = y0 + L.line_sm + 6
+    bot = L.h - L.footer_h - ticker_h - 4
+    # leave room for the N/S cardinal labels, which sit at R+10 and would
+    # otherwise collide with the header line and the ticker
+    R = max(20, min((bot - top) // 2 - 16, L.w // 4))
+    cx, cy = L.w // 2, top + (bot - top) // 2
+    pts = [(_blip_east_north(t), t) for t in tops]
+    max_mi = max([math.hypot(e, n) for (e, n), _ in pts] + [0.5])
+    scale = next((v for v in _RADAR_STEPS if v >= max_mi), 150)
+
+    for i in (1, 2, 3):
+        rr = round(R * i / 3)
+        d.ellipse((cx - rr, cy - rr, cx + rr, cy + rr), outline=(30, 54, 74))
+        d.text((cx + 3, cy - rr - 1), f"{round(scale * i / 3)}", font=L.sm, fill=(70, 90, 110))
+    d.line((cx - R, cy, cx + R, cy), fill=(30, 54, 74))
+    d.line((cx, cy - R, cx, cy + R), fill=(30, 54, 74))
+    for label, dx, dy in (("N", 0, -1), ("S", 0, 1), ("E", 1, 0), ("W", -1, 0)):
+        lx = cx + dx * (R + 10) - d.textlength(label, font=L.sm) / 2
+        d.text((lx, cy + dy * (R + 10) - 6), label, font=L.sm, fill=DIM)
+
+    for (e, n), t in pts:
+        m = math.hypot(e, n) or 1.0
+        k = min(1.0, m / scale)
+        x = cx + (e / m) * k * R
+        y = cy - (n / m) * k * R
+        col = AMBER if t.get("mil") else CYAN
+        d.ellipse((x - 3, y - 3, x + 3, y + 3), fill=col)
+    d.ellipse((cx - 4, cy - 4, cx + 4, cy + 4), outline=(255, 210, 127))
+    d.ellipse((cx - 1, cy - 1, cx + 1, cy + 1), fill=(255, 210, 127))
+
+    # ── ticker: one aircraft at a time, swapped every TICKER_SEC ─────────
+    t = tops[_ticker_index(len(tops))]
+    ty = L.h - L.footer_h - ticker_h
+    ident = (t.get("callsign") or "—").strip() or "—"
+    d.text((L.pad, ty), ident, font=L.md, fill=AMBER if t.get("mil") else WHITE)
+    iw = d.textlength(ident, font=L.md)
+    bits = []
+    if t.get("altFt"):
+        bits.append(f"{t['altFt']:,} ft")
+    bits.append(f"{t.get('distMi', '?')}mi {t.get('bearing', '')}".strip())
+    d.text((L.pad + iw + 10, ty + 2), " · ".join(bits), font=L.sm, fill=DIM)
+    sub = t.get("route") or t.get("typeDesc") or ""
+    if sub:
+        d.text((L.pad, ty + L.line_md), str(sub)[:44], font=L.sm, fill=DIM)
 
 
 _CRIME_COL = {"violent": RED, "property": AMBER, "other": (120, 140, 160)}
@@ -755,9 +881,134 @@ _CRIME_RAMP_B = [22, 120, 255, 10, 70]
 _CRIME_HALF_MI = 8.0  # vertical half-span of the map region
 
 
+def _crime_heat_image(inc: list, hlat: float, hlon: float, RW: int, RH: int):
+    """KDE density fallback, used when the tile basemap is unavailable."""
+    import math
+
+    import numpy as np
+
+    mi_per_px = (2 * _CRIME_HALF_MI) / RH
+    coslat = math.cos(math.radians(hlat))
+    grid = np.zeros((RH, RW), dtype=np.float32)
+    sigma = max(3.0, RH / 38.0)
+    rad = int(sigma * 3)
+    ax = np.arange(-rad, rad + 1)
+    gx, gy = np.meshgrid(ax, ax)
+    kernel = np.exp(-(gx * gx + gy * gy) / (2 * sigma * sigma)).astype(np.float32)
+    for i2 in inc:
+        dx = (i2["lon"] - hlon) * 69.0 * coslat
+        dy = (i2["lat"] - hlat) * 69.0
+        px = int(RW / 2 + dx / mi_per_px)
+        py = int(RH / 2 - dy / mi_per_px)
+        xa, xb, ya, yb = px - rad, px + rad + 1, py - rad, py + rad + 1
+        kx0, ky0 = max(0, -xa), max(0, -ya)
+        X0, Y0, X1, Y1 = max(0, xa), max(0, ya), min(RW, xb), min(RH, yb)
+        if X1 <= X0 or Y1 <= Y0:
+            continue
+        grid[Y0:Y1, X0:X1] += kernel[ky0:ky0 + (Y1 - Y0), kx0:kx0 + (X1 - X0)]
+    vmax = float(grid.max())
+    if vmax <= 0:
+        return Image.new("RGB", (RW, RH), BG)
+    nrm = np.clip(grid / vmax, 0, 1) ** 0.7
+    rgb = np.dstack([
+        np.interp(nrm, _CRIME_STOPS, _CRIME_RAMP_R),
+        np.interp(nrm, _CRIME_STOPS, _CRIME_RAMP_G),
+        np.interp(nrm, _CRIME_STOPS, _CRIME_RAMP_B),
+    ]).astype(np.uint8)
+    return Image.fromarray(rgb, "RGB")
+
+
+# ── OSM basemap ──────────────────────────────────────────────────────────
+# Tiles are static and home changes rarely, so a disk cache makes steady-state
+# traffic ~zero — important for a 24/7 appliance under OSM's tile policy.
+TILE_PX = 256
+TILE_CACHE = os.path.expanduser("~/.cache/orrery/tiles")
+TILE_UA = "ORRERY living-room display (personal, single instance)"
+
+
+def _tile_xy(lat: float, lon: float, z: int) -> tuple:
+    """Web-Mercator: lon/lat → fractional tile coords (matches the browser)."""
+    import math
+    n = 2 ** z
+    x = (lon + 180.0) / 360.0 * n
+    r = math.radians(lat)
+    y = (1.0 - math.log(math.tan(r) + 1.0 / math.cos(r)) / math.pi) / 2.0 * n
+    return x, y
+
+
+def _fetch_tile(z: int, x: int, y: int):
+    """One OSM tile, disk-cached. Returns a PIL image or None."""
+    path = os.path.join(TILE_CACHE, str(z), str(x), f"{y}.png")
+    if os.path.exists(path):
+        try:
+            return Image.open(path).convert("RGB")
+        except Exception:
+            pass
+    try:
+        r = requests.get(
+            f"https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+            headers={"User-Agent": TILE_UA}, timeout=8,
+        )
+        r.raise_for_status()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(r.content)
+        import io
+        return Image.open(io.BytesIO(r.content)).convert("RGB")
+    except Exception as e:
+        print(f"[display] tile {z}/{x}/{y} failed: {e}", file=sys.stderr)
+        return None
+
+
+def _osm_mosaic(lat: float, lon: float, z: int, w: int, h: int):
+    """Dark-treated basemap centred on (lat, lon), or None if no tile loaded.
+
+    Inverting OSM turns its white roads black against an already-dark ground,
+    so brightness/contrast go UP, not down — same lesson as the browser map
+    (DECISIONS #114); with them down the street network vanishes entirely."""
+    from PIL import ImageEnhance, ImageOps
+
+    cx, cy = _tile_xy(lat, lon, z)
+    ox = cx * TILE_PX - w / 2.0
+    oy = cy * TILE_PX - h / 2.0
+    canvas = Image.new("RGB", (w, h), (12, 16, 22))
+    got = False
+    n = 2 ** z
+    for tx in range(int(ox // TILE_PX), int((ox + w) // TILE_PX) + 1):
+        for ty in range(int(oy // TILE_PX), int((oy + h) // TILE_PX) + 1):
+            if ty < 0 or ty >= n:
+                continue
+            tile = _fetch_tile(z, tx % n, ty)
+            if tile is None:
+                continue
+            canvas.paste(tile, (int(tx * TILE_PX - ox), int(ty * TILE_PX - oy)))
+            got = True
+    if not got:
+        return None
+    img = ImageOps.invert(canvas)
+    # hue-rotate 180° — the browser filter's second step. Without it, inverted
+    # greens stay magenta and water goes orange; PIL has no hue filter, so
+    # rotate the H channel directly (128 = 180° on the 0-255 hue scale).
+    h, sat, val = img.convert("HSV").split()
+    img = Image.merge("HSV", (h.point(lambda p: (p + 128) % 256), sat, val)).convert("RGB")
+    img = ImageEnhance.Color(img).enhance(0.45)
+    img = ImageEnhance.Contrast(img).enhance(1.35)
+    # Darker than the browser's 1.15: this sits on an unlit living-room panel
+    # beside pages whose background luminance is ~12/255, so a bright map
+    # rectangle reads as a glowing patch at night.
+    return ImageEnhance.Brightness(img).enhance(0.62)
+
+
+# Zoom for the panel map: z11 ≈ city-wide at 480px, matching the browser CITY.
+CRIME_ZOOM = 11
+
+
 def _page_crime(d, s, c, L: Layout) -> None:
-    """Heat map of recently-reported crime around home (Denver open data).
-    KDE-style density, home marker at centre. Data via fetch_crime()."""
+    """Recently-reported crime around home on a real street basemap, with a
+    ticker cycling nearby violent/property incidents (DECISIONS #115).
+    Falls back to the KDE heat map when tiles can't be fetched."""
+    import math
+
     y0 = L.header_h + L.pad
     d.text((L.pad, y0), "CRIME", font=L.sm, fill=CYAN)
     crime = c.get("crime")
@@ -777,10 +1028,9 @@ def _page_crime(d, s, c, L: Layout) -> None:
 
     inc = crime.get("incidents") or []
     n = crime.get("n", len(inc))
-    hdr = f"last {CRIME_DAYS}d · {n} reported"
-    d.text((L.pad + d.textlength("CRIME", font=L.sm) + 10, y0), hdr, font=L.sm, fill=WHITE)
+    d.text((L.pad + d.textlength("CRIME", font=L.sm) + 10, y0),
+           f"last {CRIME_DAYS}d · {n} reported", font=L.sm, fill=WHITE)
 
-    # legend row (group counts, matching the web dashboard colors)
     gc = {"violent": 0, "property": 0, "other": 0}
     for i2 in inc:
         gc[i2.get("group", "other")] = gc.get(i2.get("group", "other"), 0) + 1
@@ -793,65 +1043,70 @@ def _page_crime(d, s, c, L: Layout) -> None:
         d.text((lx + 11, ly), seg, font=L.sm, fill=col)
         lx += 11 + d.textlength(seg, font=L.sm) + 12
 
-    # map region
+    ticker_h = L.line_md + L.line_sm + 6
     RX0 = L.pad
     RY0 = ly + L.line_sm + 4
     RW = L.w - 2 * L.pad
-    RH = L.h - L.footer_h - 4 - RY0
+    RH = L.h - L.footer_h - ticker_h - 4 - RY0
     if RW < 20 or RH < 20:
         return
 
     img = getattr(d, "_image", None)
+    base = None
     try:
-        import math
+        base = _osm_mosaic(hlat, hlon, CRIME_ZOOM, RW, RH)
+    except Exception as e:
+        print(f"[display] basemap failed: {e}", file=sys.stderr)
+    if base is None:  # offline / tiles unavailable → density fallback
+        try:
+            base = _crime_heat_image(inc, hlat, hlon, RW, RH)
+        except Exception as e:
+            print(f"[display] crime heatmap failed: {e}", file=sys.stderr)
+    if base is not None and img is not None:
+        img.paste(base, (RX0, RY0))
 
-        import numpy as np
-
-        mi_per_px = (2 * _CRIME_HALF_MI) / RH
-        coslat = math.cos(math.radians(hlat))
-        grid = np.zeros((RH, RW), dtype=np.float32)
-        sigma = max(3.0, RH / 38.0)
-        rad = int(sigma * 3)
-        ax = np.arange(-rad, rad + 1)
-        gx, gy = np.meshgrid(ax, ax)
-        kernel = np.exp(-(gx * gx + gy * gy) / (2 * sigma * sigma)).astype(np.float32)
+    # incident dots, projected with the same mercator math as the basemap
+    if base is not None:
+        ccx, ccy = _tile_xy(hlat, hlon, CRIME_ZOOM)
+        ox = ccx * TILE_PX - RW / 2.0
+        oy = ccy * TILE_PX - RH / 2.0
         for i2 in inc:
-            dx = (i2["lon"] - hlon) * 69.0 * coslat
-            dy = (i2["lat"] - hlat) * 69.0
-            px = int(RW / 2 + dx / mi_per_px)
-            py = int(RH / 2 - dy / mi_per_px)
-            xa, xb, ya, yb = px - rad, px + rad + 1, py - rad, py + rad + 1
-            kx0, ky0 = max(0, -xa), max(0, -ya)
-            X0, Y0, X1, Y1 = max(0, xa), max(0, ya), min(RW, xb), min(RH, yb)
-            if X1 <= X0 or Y1 <= Y0:
+            tx, ty = _tile_xy(i2["lat"], i2["lon"], CRIME_ZOOM)
+            px = RX0 + tx * TILE_PX - ox
+            py = RY0 + ty * TILE_PX - oy
+            if not (RX0 <= px <= RX0 + RW and RY0 <= py <= RY0 + RH):
                 continue
-            grid[Y0:Y1, X0:X1] += kernel[ky0:ky0 + (Y1 - Y0), kx0:kx0 + (X1 - X0)]
-        vmax = float(grid.max())
-        if vmax > 0:
-            nrm = np.clip(grid / vmax, 0, 1) ** 0.7
-            rgb = np.dstack([
-                np.interp(nrm, _CRIME_STOPS, _CRIME_RAMP_R),
-                np.interp(nrm, _CRIME_STOPS, _CRIME_RAMP_G),
-                np.interp(nrm, _CRIME_STOPS, _CRIME_RAMP_B),
-            ]).astype(np.uint8)
-            heat = Image.fromarray(rgb, "RGB")
-        else:
-            heat = Image.new("RGB", (RW, RH), BG)
-        if img is not None:
-            img.paste(heat, (RX0, RY0))
-    except Exception as e:  # numpy missing / render error → don't blank the page
-        print(f"[display] crime heatmap failed: {e}", file=sys.stderr)
-        d.text((RX0, RY0 + RH // 2 - 8), "heatmap unavailable", font=L.md, fill=DIM)
+            col = _CRIME_COL.get(i2.get("group", "other"), DIM)
+            d.ellipse((px - 2, py - 2, px + 2, py + 2), fill=col)
 
-    # frame + home marker (centre) + scale note
     d.rectangle((RX0, RY0, RX0 + RW - 1, RY0 + RH - 1), outline=PANEL)
     cx, cy = RX0 + RW // 2, RY0 + RH // 2
     d.ellipse((cx - 5, cy - 5, cx + 5, cy + 5), outline=WHITE)
     d.ellipse((cx - 1, cy - 1, cx + 2, cy + 2), fill=WHITE)
-    d.text((cx + 8, cy - 6), "home", font=L.sm, fill=WHITE)
-    scale = f"~{round(2 * _CRIME_HALF_MI)} mi N–S · Denver Open Data"
-    d.text((RX0 + RW - d.textlength(scale, font=L.sm) - 4, RY0 + RH - L.line_sm - 2),
-           scale, font=L.sm, fill=DIM)
+
+    # ── ticker: nearest violent/property incidents, one per TICKER_SEC ───
+    coslat = math.cos(math.radians(hlat))
+    near = []
+    for i2 in inc:
+        if i2.get("group") not in ("violent", "property"):
+            continue
+        dx = (i2["lon"] - hlon) * 69.0 * coslat
+        dy = (i2["lat"] - hlat) * 69.0
+        near.append((math.hypot(dx, dy), i2))
+    near.sort(key=lambda r: r[0])
+    ty = L.h - L.footer_h - ticker_h
+    if not near:
+        d.text((L.pad, ty), "no violent or property reports nearby", font=L.sm, fill=DIM)
+        return
+    dist, item = near[_ticker_index(min(len(near), 12))]
+    col = _CRIME_COL.get(item.get("group", "other"), DIM)
+    label = str(item.get("type", "")).replace("-", " ")[:40]
+    d.text((L.pad, ty), label, font=L.md, fill=col)
+    sub = str(item.get("address") or "location withheld")[:34]
+    ago_s = ""
+    if isinstance(item.get("ts"), (int, float)):
+        ago_s = " · " + _ago(max(0, int(time.time() - item["ts"] / 1000)))
+    d.text((L.pad, ty + L.line_md), f"{sub} · {dist:.1f}mi{ago_s}", font=L.sm, fill=DIM)
 
 
 def _page_system(d, s, sysinfo, summ, L: Layout) -> None:
@@ -1307,6 +1562,7 @@ class App:
             self.draw()
         last_poll = time.time()
         last_clock = ""
+        last_tick = -1
         while True:
             if time.time() - last_poll >= POLL_SEC:
                 self.refresh()  # keeps polling while asleep — red-wake needs it
@@ -1316,13 +1572,19 @@ class App:
             if not self._awake:
                 time.sleep(0.2)
                 continue
-            dwell = CAROUSEL_SEC * (2.5 if self.page_idx == 0 else 0.8) if CAROUSEL_SEC > 0 else 0
+            # per-page dwell (DECISIONS #115); CAROUSEL_SEC=0 still disables
+            # auto-advance entirely, and scales the table when set non-default.
+            dwell = DWELL_SEC.get(PAGES[self.page_idx], 8) if CAROUSEL_SEC > 0 else 0
             if dwell > 0 and time.time() - self._last_input >= dwell:
                 self._last_input = time.time()
                 self.next_page()
             clock = time.strftime("%H:%M")
             if clock != last_clock:  # keep the footer clock honest
                 last_clock = clock
+                self._dirty = True
+            tick = int(time.time() / TICKER_SEC)
+            if tick != last_tick:  # ticker advanced → one cheap repaint
+                last_tick = tick
                 self._dirty = True
             if self._dirty:
                 self.draw()
@@ -1463,12 +1725,20 @@ def main() -> None:
             {"event": "Heat Advisory", "severity": "Moderate", "until": "21:00"}])
         cond_tornado = dict(cond_calm, cond="thunderstorm", alerts=[
             {"event": "Tornado Warning", "severity": "Extreme", "until": "19:45"}])
-        # live crime pull for the CRIME page mock, at the snapshot's home
+        # SKY / SPACE fixtures so those pages render something in the mock
+        cond_alerts.update({
+            "iss": {"rise_ms": (time.time() + 5400) * 1000, "rise_dir": "NW",
+                    "max_el": 45, "duration_s": 420, "bright": True},
+            "moon": {"name": "waxing gibbous", "illumination": 0.57},
+            "kp_max": 3.7, "aurora": "none",
+        })
+        # live crime + basemap pull for the CRIME page mock, at the real home
         _home = data.get("home") or {}
         if _home.get("lat") is not None:
             cond_alerts["crime"] = fetch_crime(_home["lat"], _home["lon"])
         for i in range(len(PAGES)):
-            render(summ, i, sysinfo, L, cond_alerts).save(os.path.join(args.mock, f"{PAGES[i].lower()}.png"))
+            name = PAGES[i].lower().replace(" ", "_")
+            render(summ, i, sysinfo, L, cond_alerts).save(os.path.join(args.mock, f"{name}.png"))
         render(summ, 0, sysinfo, L, cond_calm).save(os.path.join(args.mock, "today_calm.png"))
         render(summ, 0, sysinfo, L, cond_tornado).save(os.path.join(args.mock, "today_tornado.png"))
         render(Summary(raw={}, fetched_at=time.time() - 500, ok=False), 0, sysinfo, L).save(
