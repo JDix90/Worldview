@@ -193,6 +193,36 @@ export async function jobOpsWatch(redis: Redis, db: Queryable): Promise<void> {
     }
   }
 
+  // A missed briefing is the failure the soak can least afford and the one that
+  // hid best: 2026-07-17 and 07-19 were billed and lost, leaving only a log
+  // line, so the streak was broken for days before anyone counted (#116).
+  // Deliberately cause-agnostic — it asks whether the row exists, not why it
+  // might not, so an empty completion, a DB error, a tripped breaker or a dead
+  // worker all surface the same way. `% 24` keeps midnight (0 or 24 depending
+  // on the formatter) outside the window instead of alerting on a day that has
+  // barely started.
+  const hourLocal =
+    Number(
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: env.briefingTimezone, hour: 'numeric', hour12: false,
+      }).format(new Date()),
+    ) % 24;
+  if (hourLocal >= env.briefingHourLocal + 2 && hourLocal <= 23) {
+    const dateLocal = new Intl.DateTimeFormat('en-CA', { timeZone: env.briefingTimezone }).format(new Date());
+    const { rows } = await db.query(`SELECT 1 FROM briefing WHERE date_local = $1`, [dateLocal]);
+    if (rows.length === 0) {
+      const latch = await redis.set(`ops:briefing-missing:${dateLocal}`, '1', 'EX', 36 * 3600, 'NX');
+      if (latch !== null) {
+        await pushOps(
+          'ORRERY — no briefing filed today',
+          `Nothing filed for ${dateLocal} by ${String(hourLocal).padStart(2, '0')}:00 local.` +
+            ` The streak is broken until this is looked at — check the worker log for an analyst error.`,
+        );
+        logError('briefing', 'no briefing filed past the alert hour', { dateLocal, hourLocal });
+      }
+    }
+  }
+
   const client = new AnalystClient(db);
   const mtd = await client.monthToDateUsd();
   if (mtd >= 0.7 * env.monthlySpendCapUsd) {

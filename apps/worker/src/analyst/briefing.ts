@@ -155,7 +155,16 @@ export async function generateBriefing(
       .map((b) => b.text)
       .join('\n')
       .trim();
-    if (!body) throw new Error('briefing came back empty');
+    if (!body) {
+      // Known failure mode, and an expensive one: adaptive thinking eats the
+      // whole max_tokens budget, no text block comes back, and the call has
+      // already been billed. This lost 2026-07-17 and 07-19 (#116). Name the
+      // cause in the message so a post-mortem doesn't have to re-derive it.
+      throw new Error(
+        `briefing came back empty — no text block (in ${result.inputTokens}, out ${result.outputTokens} tokens);` +
+          ' thinking likely consumed max_tokens. The call was billed.',
+      );
+    }
   }
 
   if (isDryRun) return { body, quiet, persisted: false };

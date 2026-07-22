@@ -9,12 +9,29 @@
 import { env } from '../env.js';
 import { log, logError } from '../log.js';
 
+/**
+ * HTTP header values are ByteStrings (Latin-1). Every title here reads
+ * "ORRERY — …", and that em dash (U+2014) made `fetch` throw before the
+ * request was ever sent — so *every* ops alert failed silently, including the
+ * collector-silent alarm that fired during the 2026-07-22 OpenSky outage and
+ * never reached anyone (DECISIONS #117). The body is unaffected: only headers
+ * are constrained, so the punctuation is transliterated rather than dropped.
+ */
+function headerSafe(s: string): string {
+  return s
+    .replace(/[—–]/g, '-')
+    .replace(/[""]/g, '"')
+    .replace(/['']/g, "'")
+    .replace(/…/g, '...')
+    .replace(/[^\x20-\xFF]/g, '?'); // anything still outside Latin-1
+}
+
 async function send(title: string, message: string, priority: 3 | 4): Promise<boolean> {
   if (!env.ntfyTopic) return false;
   try {
     const res = await fetch(`https://ntfy.sh/${env.ntfyTopic}`, {
       method: 'POST',
-      headers: { Title: title, Priority: String(priority) },
+      headers: { Title: headerSafe(title), Priority: String(priority) },
       body: message,
       signal: AbortSignal.timeout(10_000),
     });
