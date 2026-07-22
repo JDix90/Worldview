@@ -9,6 +9,7 @@ import { SpinToggle } from './ui/SpinToggle';
 import { ScreenToggle } from './ui/ScreenToggle';
 import { LocationChip } from './ui/LocationChip';
 import { HomeDashboard } from './ui/HomeDashboard';
+import { FlightSearch } from './ui/FlightSearch';
 import { AircraftStore } from './feed/aircraftStore';
 import { useAircraftFeed } from './feed/useAircraftFeed';
 import { buildLayerDefs } from './layers';
@@ -82,6 +83,7 @@ export function App() {
         routeHex={routeHex}
       />
       <Hud store={store} feedStatus={status} />
+      <FlightSearch store={store} milStore={milStore} onSelect={handleSelect} />
       {selectedHex && (
         <AircraftCard
           store={store}
