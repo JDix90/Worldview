@@ -53,7 +53,11 @@ function extractBriefing(b: { date_local: string; body_md: string; quiet: boolea
 
   const lead = paras[0] ? sentenceTrim(paras[0], 240) : '';
   const changedRaw = paras.find((p) => /^what changed\s*:/i.test(p));
-  const changed = changedRaw ? sentenceTrim(changedRaw.replace(/^what changed\s*:\s*/i, ''), 300) : null;
+  // 900, not 300: the panel now pages this across the BRIEFING dwell (#118),
+  // so a 300-char cap was truncating the digest before the pager ever got a
+  // chance to show it. The browser line-clamps this field, so the extra length
+  // costs nothing there.
+  const changed = changedRaw ? sentenceTrim(changedRaw.replace(/^what changed\s*:\s*/i, ''), 900) : null;
 
   const last = paras[paras.length - 1] ?? '';
   const signoff =

@@ -488,10 +488,22 @@ def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
     d = ImageDraw.Draw(img)
     page = PAGES[page_idx]
 
-    # header bar
-    d.rectangle((0, 0, L.w, L.header_h), fill=PANEL)
+    # header bar. On battery it takes over: a house power cut is the one thing
+    # this appliance knows that no other screen in a dark room does, and it was
+    # previously a single dim row on the 9th page (#118). Riding the header
+    # means every page inherits it with no layout shift and no overlap risk.
+    batt_pct = sysinfo.get("battery_pct")
+    on_battery = str(sysinfo.get("power", "AC")).upper() not in ("AC", "", "—", "NONE")
+    critical = on_battery and isinstance(batt_pct, int) and batt_pct <= 20
+    d.rectangle((0, 0, L.w, L.header_h),
+                fill=(70, 18, 18) if critical else (58, 38, 0) if on_battery else PANEL)
     d.text((L.pad, (L.header_h - 14) // 2), "ORRERY", font=L.sm, fill=CYAN)
     d.text((L.pad + round(L.w * 0.26), (L.header_h - 14) // 2), page, font=L.sm, fill=WHITE)
+    if on_battery:
+        warn = "⚠ ON BATTERY" + (f" {batt_pct}%" if batt_pct is not None else "")
+        wcol = RED if critical else AMBER
+        wx = L.w - L.pad - 2 * (L.header_h // 3) - 10 - d.textlength(warn, font=L.sm)
+        d.text((wx, (L.header_h - 14) // 2), warn, font=L.sm, fill=wcol)
     status = "stale"
     if summary and summary.ok:
         status = overall_status(summary.raw)
@@ -769,12 +781,23 @@ def _page_briefing(d, s, _sys, _summ, L: Layout) -> None:
     changed = b.get("changed")
     if changed:
         y += 4
+        label_y = y
         d.text((L.pad, y), "changed", font=L.sm, fill=CYAN)
         y += L.line_sm
-        budget = (L.h - L.footer_h - reserve - y) // L.line_sm
-        for ln in _wrap(d, _demark(changed), L.sm, max_w)[:max(0, budget)]:
+        budget = max(1, (L.h - L.footer_h - reserve - y) // L.line_sm)
+        lines = _wrap(d, _demark(changed), L.sm, max_w)
+        # The digest is the panel's best content and it was being clipped
+        # mid-sentence. Page it across the dwell on the existing ticker clock
+        # instead of truncating (#118) — the sign-off below is pinned, so the
+        # dry closing line always lands.
+        pages = max(1, -(-len(lines) // budget))
+        pg = _ticker_index(pages) if pages > 1 else 0
+        for ln in lines[pg * budget:(pg + 1) * budget]:
             d.text((L.pad, y), ln, font=L.sm, fill=DIM)
             y += L.line_sm
+        if pages > 1:
+            tag = f"{pg + 1}/{pages}"
+            d.text((L.pad + d.textlength("changed  ", font=L.sm), label_y), tag, font=L.sm, fill=DIM)
     # sign-off: the duty-officer tagline, near the bottom
     if signoff:
         sy = L.h - L.footer_h - reserve + 2
