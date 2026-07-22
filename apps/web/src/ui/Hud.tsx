@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react';
 import { subsolarPoint } from '../globe/solar';
 import { DEBUG_UI } from '../prefs';
+import { apiGet } from '../feed/api';
 import type { AircraftStore } from '../feed/aircraftStore';
 import type { FeedStatus } from '../feed/useAircraftFeed';
 
@@ -23,9 +24,26 @@ function fmt(deg: number, pos: string, neg: string): string {
   return `${Math.abs(deg).toFixed(1)}°${deg >= 0 ? pos : neg}`;
 }
 
+interface UpstreamHealth {
+  state: 'ok' | 'degraded' | 'down';
+  reason: string | null;
+}
+
 export function Hud({ store, feedStatus }: { store: AircraftStore; feedStatus: FeedStatus }) {
   const [now, setNow] = useState(() => new Date());
   const [fps, setFps] = useState<number | null>(null);
+  const [health, setHealth] = useState<UpstreamHealth | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      apiGet<UpstreamHealth>('/api/health/upstreams')
+        .then((h) => alive && setHealth(h))
+        .catch(() => undefined);
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
 
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 1000);
@@ -56,9 +74,18 @@ export function Hud({ store, feedStatus }: { store: AircraftStore; feedStatus: F
   const clock = now.toISOString().slice(0, 19).replace('T', ' ') + 'Z';
   const stats = store.stats();
   const dataAgeS = stats.fetchedAt ? Math.max(0, Math.round(now.getTime() / 1000 - stats.fetchedAt)) : null;
-  const link =
+  // The websocket being LIVE says nothing about whether the data behind it is
+  // fresh: during the 2026-07-22 OpenSky outage the socket stayed up while the
+  // picture silently aged. The server's derived verdict is the honest one.
+  const linkLabel =
     feedStatus === 'live' ? 'LIVE' : feedStatus === 'connecting' ? 'CONNECTING…' : 'RECONNECTING…';
-  const linkColor = feedStatus === 'live' ? 'rgba(143,163,184,0.85)' : '#ffb300';
+  const link = health && health.state !== 'ok' && feedStatus === 'live'
+    ? health.state === 'down' ? 'FEED DOWN' : 'FEED DEGRADED'
+    : linkLabel;
+  const linkColor =
+    health?.state === 'down' ? '#ff5a5a'
+      : health?.state === 'degraded' ? '#ffb300'
+        : feedStatus === 'live' ? 'rgba(143,163,184,0.85)' : '#ffb300';
 
   return (
     <div style={style}>
@@ -67,10 +94,11 @@ export function Hud({ store, feedStatus }: { store: AircraftStore; feedStatus: F
       SUN {fmt(sun.lat, 'N', 'S')} {fmt(sun.lng, 'E', 'W')}
       {fps !== null && <> · {fps} FPS</>}
       <br />
-      <span style={{ color: linkColor }}>
+      <span style={{ color: linkColor }} title={health?.reason ?? undefined}>
         {link}
         {stats.rendered > 0 && <> · {stats.rendered.toLocaleString()} AIRCRAFT</>}
         {dataAgeS !== null && <> · DATA {dataAgeS}s</>}
+        {health?.reason && health.state !== 'ok' && <> · {health.reason}</>}
       </span>
     </div>
   );

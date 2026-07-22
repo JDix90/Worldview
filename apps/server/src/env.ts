@@ -25,6 +25,9 @@ export const env = {
   /** Home anchor for the appliance display's local view (Denver metro default;
    * override live via POST /api/settings/home from the globe's HOME chip). */
   /** Home airport for the TODAY/dashboard delay line (FAA status). */
+  /** Local day boundary for the gate/briefing aggregates. Must match the
+   *  worker's BRIEFING_TIMEZONE or `date_local` keys won't line up. */
+  briefingTimezone: process.env.BRIEFING_TIMEZONE ?? 'America/Denver',
   ownerAirport: (process.env.OWNER_AIRPORT ?? 'DEN').toUpperCase(),
   ownerLat: Number(process.env.OWNER_LAT ?? 39.74),
   ownerLon: Number(process.env.OWNER_LON ?? -104.99),

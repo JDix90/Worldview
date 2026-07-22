@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import type { Severity, Signal } from '@orrery/shared';
 import { apiGet } from '../feed/api';
 import { DEBUG_UI } from '../prefs';
+import { GateReview } from './GateReview';
 import { Chip, CHIP_DIM } from './Chip';
 
 interface FeedSignal extends Signal {
@@ -115,6 +116,7 @@ interface FeedPanelProps {
 
 export function FeedPanel({ open, onOpenChange, chipVisible, bottom }: FeedPanelProps) {
   const [tab, setTab] = useState<'signals' | 'briefing'>('signals');
+  const [gateOpen, setGateOpen] = useState(false);
   const [signals, setSignals] = useState<FeedSignal[]>([]);
   const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [cost, setCost] = useState<{ mtd_usd: number } | null>(null);
@@ -200,9 +202,17 @@ export function FeedPanel({ open, onOpenChange, chipVisible, bottom }: FeedPanel
           </span>
         ))}
         <span style={{ flex: 1 }} />
+        <span
+          onClick={() => setGateOpen(true)}
+          title="Go/No-Go review — the FOUNDATION §11 evidence"
+          style={{ cursor: 'pointer', color: '#4fd8ff', opacity: 0.85, fontSize: 10 }}
+        >
+          GATE ›
+        </span>
         {DEBUG_UI && cost && <span style={{ opacity: 0.45 }}>${cost.mtd_usd.toFixed(2)} mtd</span>}
         <span onClick={() => onOpenChange(false)} style={{ cursor: 'pointer', opacity: 0.6 }}>✕</span>
       </div>
+      {gateOpen && <GateReview onClose={() => setGateOpen(false)} />}
 
       {tab === 'signals' && (
         <div>

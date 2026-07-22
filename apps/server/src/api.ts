@@ -482,6 +482,143 @@ export function registerApi(
       return { monthToDate: rows[0] };
     });
 
+    /**
+     * Go/No-Go evidence (FOUNDATION §11), one row per local day. Assembled
+     * server-side so the browser and the panel can never disagree about the
+     * streak — the 2026-07-17/19 briefings were lost silently (thinking ate
+     * the old 1200 max_tokens, empty body, no row after a paid call), and the
+     * only reason that went unnoticed for days is that nothing counted.
+     */
+    scope.get<{ Querystring: { days?: string } }>('/api/stats/gate', async (req) => {
+      const days = Math.min(60, Math.max(1, Number(req.query.days ?? 14) || 14));
+      const tz = env.briefingTimezone;
+      const since = `${days} days`;
+      const [buckets, sigs, health, briefs, cost, shadow, today] = await Promise.all([
+        pool.query(
+          `SELECT (bucket_ts AT TIME ZONE $1)::date::text AS d, count(*)::int AS n
+           FROM rollup_run WHERE bucket_ts >= now() - $2::interval GROUP BY 1`,
+          [tz, since],
+        ),
+        pool.query(
+          `SELECT (ts AT TIME ZONE $1)::date::text AS d, severity, count(*)::int AS n
+           FROM signal WHERE ts >= now() - $2::interval AND detector <> 'data_health'
+           GROUP BY 1, 2`,
+          [tz, since],
+        ),
+        pool.query(
+          `SELECT (ts AT TIME ZONE $1)::date::text AS d, count(*)::int AS n
+           FROM signal WHERE ts >= now() - $2::interval AND detector = 'data_health' GROUP BY 1`,
+          [tz, since],
+        ),
+        pool.query(
+          `SELECT date_local::text AS d, quiet, length(body_md)::int AS chars,
+                  extract(hour from (ts AT TIME ZONE $1))::int AS filed_hour
+           FROM briefing WHERE ts >= now() - $2::interval`,
+          [tz, since],
+        ),
+        pool.query(
+          `SELECT (ts AT TIME ZONE $1)::date::text AS d,
+                  sum(est_cost_usd)::float8 AS usd, count(*)::int AS calls
+           FROM analyst_usage WHERE ts >= now() - $2::interval GROUP BY 1`,
+          [tz, since],
+        ),
+        pool.query(
+          `SELECT (ts AT TIME ZONE $1)::date::text AS d, count(*)::int AS n,
+                  count(*) FILTER (WHERE pushed)::int AS pushed
+           FROM shadow_push WHERE ts >= now() - $2::interval GROUP BY 1`,
+          [tz, since],
+        ),
+        pool.query(`SELECT (now() AT TIME ZONE $1)::date::text AS d`, [tz]),
+      ]);
+
+      const by = <T extends { d: string }>(rows: T[]) => new Map(rows.map((r) => [r.d, r]));
+      const bMap = by(buckets.rows), hMap = by(health.rows), brMap = by(briefs.rows);
+      const cMap = by(cost.rows), sMap = by(shadow.rows);
+      const sevMap = new Map<string, Record<string, number>>();
+      for (const r of sigs.rows) {
+        const e = sevMap.get(r.d) ?? { S1: 0, S2: 0, S3: 0 };
+        e[r.severity as string] = r.n as number;
+        sevMap.set(r.d, e);
+      }
+
+      // Scaffold every day in the window so a missing briefing is a visible
+      // hole rather than an absent row.
+      const todayStr = today.rows[0].d as string;
+      const out: Array<Record<string, unknown>> = [];
+      for (let i = 0; i < days; i++) {
+        const dt = new Date(`${todayStr}T00:00:00Z`);
+        dt.setUTCDate(dt.getUTCDate() - i);
+        const d = dt.toISOString().slice(0, 10);
+        const br = brMap.get(d) as { quiet: boolean; chars: number; filed_hour: number } | undefined;
+        out.push({
+          date: d,
+          buckets: (bMap.get(d)?.n as number) ?? 0,
+          coveragePct: Math.round((((bMap.get(d)?.n as number) ?? 0) / 288) * 100),
+          signals: sevMap.get(d) ?? { S1: 0, S2: 0, S3: 0 },
+          dataHealth: (hMap.get(d)?.n as number) ?? 0,
+          briefing: br
+            ? { filed: true, quiet: br.quiet, chars: br.chars, filedHour: br.filed_hour }
+            : { filed: false },
+          analyst: { usd: (cMap.get(d)?.usd as number) ?? 0, calls: (cMap.get(d)?.calls as number) ?? 0 },
+          shadow: { total: (sMap.get(d)?.n as number) ?? 0, pushed: (sMap.get(d)?.pushed as number) ?? 0 },
+        });
+      }
+
+      // Current streak counts back from today; a day that hasn't reached the
+      // briefing hour yet doesn't break it.
+      const filed = new Set(briefs.rows.map((r) => r.d as string));
+      // Today is excluded: a day still in progress isn't a gap, it's pending.
+      const gaps = out.slice(1).filter((r) => !filed.has(r.date as string)).map((r) => r.date as string);
+      let current = 0;
+      for (let i = 0; i < out.length; i++) {
+        const d = out[i]!.date as string;
+        if (filed.has(d)) current++;
+        else if (i === 0) continue; // today may simply be pre-briefing
+        else break;
+      }
+      let longest = 0, run = 0;
+      for (let i = out.length - 1; i >= 0; i--) {
+        if (filed.has(out[i]!.date as string)) { run++; longest = Math.max(longest, run); }
+        else run = 0;
+      }
+      return {
+        timezone: tz, expectedBucketsPerDay: 288, windowDays: days,
+        days: out, streak: { current, longest, gaps },
+      };
+    });
+
+    /**
+     * One derived feed verdict, shared by every surface (browser HUD, HOME,
+     * Pi SYSTEM) so they can never word it differently. Derived from data that
+     * is already persisted — snapshot age plus D0's own data_health signals —
+     * so no collector change was needed to make outages visible.
+     */
+    scope.get('/api/health/upstreams', async () => {
+      const meta = await redis.hgetall(REDIS_KEYS.hotSnapshotMeta);
+      const ageS = meta.updatedAtMs
+        ? Math.max(0, Math.round((Date.now() - Number(meta.updatedAtMs)) / 1000))
+        : null;
+      const { rows } = await pool.query(
+        `SELECT payload->>'what' AS what, ts FROM signal
+         WHERE detector = 'data_health' AND ts >= now() - interval '60 minutes'
+         ORDER BY ts DESC LIMIT 1`,
+      );
+      const recent = rows[0] as { what: string; ts: string } | undefined;
+      let state: 'ok' | 'degraded' | 'down' = 'ok';
+      let reason: string | null = null;
+      if (ageS === null || ageS >= 1800) {
+        state = 'down';
+        reason = ageS === null ? 'no snapshot recorded' : `no data for ${Math.round(ageS / 60)}m`;
+      } else if (ageS >= 300) {
+        state = 'degraded';
+        reason = `data ${Math.round(ageS / 60)}m old`;
+      } else if (recent) {
+        state = 'degraded';
+        reason = recent.what;
+      }
+      return { state, reason, snapshotAgeS: ageS, creditsRemaining: meta.creditsRemaining ?? null };
+    });
+
     scope.get('/api/rollups/status', async () => {
       const latest = await pool.query(
         `SELECT bucket_ts, total_aircraft, cells FROM rollup_run ORDER BY bucket_ts DESC LIMIT 1`,
