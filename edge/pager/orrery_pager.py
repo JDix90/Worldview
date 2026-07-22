@@ -487,6 +487,33 @@ def _ticker_index(n: int, now: Optional[float] = None) -> int:
     return int((now if now is not None else time.time()) / TICKER_SEC) % n
 
 
+# ── Dusk palette (Phase 1 B2, DECISIONS #120) ────────────────────────────
+# The panel lives in a living room: after dark, full luminance reads as a
+# glowing rectangle. Between sunset and sunrise the whole frame dims ~30%
+# with a slight warm shift (blue pulled down — cyan reads harshest in the
+# dark). Software-only: this HAT's backlight is binary (#118), and a single
+# post-render transform means every page inherits it with zero per-page work.
+def _dusk_active(cond: dict, now_min: Optional[int] = None) -> bool:
+    """True when it is dark outside, judged by the fetched sun times.
+    Missing/garbled times → False (never dim on bad data)."""
+    try:
+        ss, sr = cond.get("sunset"), cond.get("sunrise")
+        if not ss or not sr:
+            return False
+        p = lambda t: int(t[:2]) * 60 + int(t[3:5])
+        now = now_min if now_min is not None else (
+            time.localtime().tm_hour * 60 + time.localtime().tm_min)
+        return now >= p(ss) or now < p(sr)
+    except Exception:
+        return False
+
+
+def _apply_dusk(img: Image.Image) -> Image.Image:
+    from PIL import ImageEnhance
+    r, g, b = ImageEnhance.Brightness(img).enhance(0.72).split()
+    return Image.merge("RGB", (r, g, b.point(lambda v: int(v * 0.90))))
+
+
 # ── Attention-aware rotation (Phase 1 B1, DECISIONS #120) ────────────────
 # The carousel was strictly periodic: a Tornado Warning got the same 6 s slot
 # in the same position as a quiet HAZARDS page. These rules make the panel
@@ -531,7 +558,8 @@ def compute_rotation(s: dict, c: dict, sysinfo: dict, hour_local: int) -> tuple:
 
 def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
            conditions: Optional[dict] = None, page_name: Optional[str] = None,
-           promoted: bool = False, n_pages: Optional[int] = None) -> Image.Image:
+           promoted: bool = False, n_pages: Optional[int] = None,
+           dusk: Optional[bool] = None) -> Image.Image:
     img = Image.new("RGB", (L.w, L.h), BG)
     d = ImageDraw.Draw(img)
     # page_name overrides the static table: conditional pages (RADAR) exist
@@ -596,7 +624,7 @@ def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
             "SYSTEM": _page_system,
         }[page](d, s, sysinfo, summary, L)
     _footer(d, page_idx, sysinfo, L, n_pages)
-    return img
+    return _apply_dusk(img) if (dusk if dusk is not None else _dusk_active(conditions or {})) else img
 
 
 def _page_now(d, s: dict, c: dict, L: Layout) -> None:
@@ -667,6 +695,23 @@ def _page_hazards(d, s: dict, c: dict, L: Layout) -> None:
         d.text((L.pad, y), "nothing active near you", font=L.md, fill=GREEN)
 
 
+def _draw_moon_disc(d, cx: int, cy: int, R: int, illumination: float, waxing: bool) -> None:
+    """Tonight's true phase. Same construction as the browser disc (#111):
+    a lit half-disc plus a terminator ellipse whose fill flips at quarter —
+    unambiguous pieces, no arc-sweep flags. Waxing = lit on the RIGHT
+    (Northern-Hemisphere convention; the browser version got this wrong
+    first and the sign was fixed by eyeballing a known waxing gibbous)."""
+    LIGHT, DARK, EDGE = (232, 238, 243), (18, 24, 31), (100, 115, 130)
+    k = max(0.0, min(1.0, illumination))
+    d.ellipse((cx - R, cy - R, cx + R, cy + R), fill=DARK)
+    # lit limb: right half when waxing, left when waning
+    d.pieslice((cx - R, cy - R, cx + R, cy + R),
+               start=-90 if waxing else 90, end=90 if waxing else 270, fill=LIGHT)
+    rx = max(1, int(R * abs(1 - 2 * k)))
+    d.ellipse((cx - rx, cy - R, cx + rx, cy + R), fill=LIGHT if k > 0.5 else DARK)
+    d.ellipse((cx - R, cy - R, cx + R, cy + R), outline=EDGE)
+
+
 def _page_sky(d, _s: dict, c: dict, L: Layout) -> None:
     """Tonight's sky: next visible ISS pass + moon phase. Unconditional now
     that it owns a page (it used to appear only after ~sunset−1h)."""
@@ -693,6 +738,10 @@ def _page_sky(d, _s: dict, c: dict, L: Layout) -> None:
         y += L.line_md + 8
     moon = c.get("moon")
     if moon:
+        R = max(24, round(min(L.w, L.h) * 0.14))
+        mx = L.w - L.pad - R - 6
+        my = max(y + R, (L.header_h + (L.h - L.footer_h)) // 2)
+        _draw_moon_disc(d, mx, my, R, moon["illumination"], bool(moon.get("waxing", True)))
         d.text((L.pad, y), f"☾ {moon['name']}", font=L.md, fill=WHITE)
         y += L.line_md + 2
         d.text((L.pad, y), f"{round(moon['illumination'] * 100)}% lit", font=L.sm, fill=DIM)
@@ -1926,6 +1975,19 @@ def selftest() -> int:
         fails += 1
         print(f"  FAIL  sky module: {e}")
 
+    # ── dusk palette gate (Phase 1 B2) ───────────────────────────────────
+    sun = {"sunset": "20:27", "sunrise": "05:42"}
+    for label, mins, want in [("22:00 after sunset", 22*60, True),
+                              ("12:00 midday", 12*60, False),
+                              ("05:00 pre-dawn", 5*60, True),
+                              ("05:50 after sunrise", 5*60+50, False)]:
+        got = _dusk_active(sun, mins)
+        fails += 0 if got == want else 1
+        print(f"  {'PASS' if got == want else 'FAIL'}  dusk {label}: {got} (want {want})")
+    got = _dusk_active({}, 22*60)
+    fails += 0 if got is False else 1
+    print(f"  {'PASS' if got is False else 'FAIL'}  dusk missing sun times: never dims")
+
     # ── attention-aware rotation (Phase 1 B1) ────────────────────────────
     AC = {"power": "AC"}
     BATT = {"power": "battery", "battery_pct": 80}
@@ -2007,7 +2069,7 @@ def _mock_fixtures(data: dict) -> dict:
             "aqi": 76, "pm25": 4.5, "alerts": [],
             "iss": {"rise_ms": (time.time() + 5400) * 1000, "rise_dir": "NW",
                     "max_el": 45, "duration_s": 420, "bright": True},
-            "moon": {"name": "waxing gibbous", "illumination": 0.57},
+            "moon": {"name": "waxing gibbous", "illumination": 0.57, "waxing": True},
             "kp_max": 3.7, "aurora": "none"}
     home = data.get("home") or {}
     if home.get("lat") is not None:
@@ -2034,6 +2096,7 @@ def _mock_fixtures(data: dict) -> dict:
         "radar":    {"sysinfo": ac,
                      "cond": dict(calm, radar=dict(calm.get("radar") or {}, near=True)),
                      "ok": True},
+        "dusk":     {"sysinfo": ac, "cond": calm, "ok": True, "dusk": True},
     }
 
 
@@ -2091,7 +2154,8 @@ def main() -> None:
             for i, pname in enumerate(pages):
                 fname_png = f"{i:02d}_" + pname.lower().replace(" ", "_") + ".png"
                 render(summ, i, fx["sysinfo"], L, fx["cond"], page_name=pname,
-                       promoted=pname in prom, n_pages=len(pages)).save(
+                       promoted=pname in prom, n_pages=len(pages),
+                       dusk=fx.get("dusk")).save(
                     os.path.join(outdir, fname_png))
                 total += 1
             print(f"  {fname}: rotation = {' > '.join(pages)}"
