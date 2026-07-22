@@ -217,15 +217,18 @@ export function CrimeMap({ incidents, home, homeLabel, sourceLabel, attribution,
                 position: 'absolute',
                 left: t.left,
                 top: t.top,
-                // dark-map treatment: invert + desaturate the standard OSM style
-                filter: 'invert(1) hue-rotate(180deg) saturate(0.25) brightness(0.8) contrast(0.95)',
+                // Dark-map treatment: invert + hue-rotate is the standard recipe,
+                // but inverting OSM turns its white roads black against an
+                // already-dark ground — so keep brightness/contrast UP or the
+                // street network disappears entirely (verified in-browser).
+                filter: 'invert(1) hue-rotate(180deg) saturate(0.45) brightness(1.15) contrast(1.3)',
                 userSelect: 'none',
                 pointerEvents: 'none',
               }}
             />
           ))}
           {/* tint to sink the basemap behind the dots */}
-          <div style={{ position: 'absolute', inset: 0, background: 'rgba(6,10,16,0.35)', pointerEvents: 'none' }} />
+          <div style={{ position: 'absolute', inset: 0, background: 'rgba(6,10,16,0.12)', pointerEvents: 'none' }} />
           <svg
             width="100%"
             height={MAP_H}

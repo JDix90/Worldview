@@ -92,14 +92,16 @@ export function App() {
         />
       )}
       {card && !selectedHex && <ObjectCard card={card} onClose={() => setCard(null)} />}
-      {/* bottom-right control cluster — one aligned stack, 30px steps up from
-          the LAYERS base (fresh-eyes review 2026-07-22 / DECISIONS #110) */}
-      <FeedPanel open={openPanel === 'feed'} onOpenChange={(v) => setOpenPanel(v ? 'feed' : null)} />
-      <HomeDashboard {...panelProps('home')} bottom={134} />
-      <LocationChip {...panelProps('location')} bottom={104} />
-      {openPanel === null && <ScreenToggle bottom={74} />}
-      {openPanel === null && <SpinToggle enabled={spinEnabled} onToggle={toggleSpin} bottom={44} />}
-      <LayersPanel defs={layerDefs} enabled={layersEnabled} onToggle={toggleLayer} {...panelProps('layers')} bottom={14} />
+      {/* Bottom-right control cluster, grouped by kind (design review #114):
+          state toggles at the base, then a gap, then the four surfaces that
+          open panels (they carry a › chevron). FEED moved here from its old
+          orphaned top-right corner. 30px steps; 8px gap between groups. */}
+      {openPanel === null && <SpinToggle enabled={spinEnabled} onToggle={toggleSpin} bottom={14} />}
+      {openPanel === null && <ScreenToggle bottom={44} />}
+      <LayersPanel defs={layerDefs} enabled={layersEnabled} onToggle={toggleLayer} {...panelProps('layers')} bottom={82} />
+      <LocationChip {...panelProps('location')} bottom={112} />
+      <HomeDashboard {...panelProps('home')} bottom={142} />
+      <FeedPanel {...panelProps('feed')} bottom={172} />
     </>
   );
 }

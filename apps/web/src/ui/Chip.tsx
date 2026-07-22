@@ -15,7 +15,7 @@ export const CHIP_GREEN = '#6be36b';
 const base: React.CSSProperties = {
   position: 'fixed',
   right: 12,
-  width: 124,
+  width: 132,
   boxSizing: 'border-box',
   display: 'flex',
   alignItems: 'baseline',
@@ -37,15 +37,26 @@ interface ChipProps {
   state?: ReactNode;
   stateColor?: string;
   title?: string;
+  /**
+   * True for chips that open a surface (feed, home, location, layers): adds a
+   * trailing chevron + brighter border so "opens something" reads differently
+   * from a state toggle (SPIN/SCREEN). Before this the two were visually
+   * identical and nothing hinted the panels existed (design review #114).
+   */
+  opens?: boolean;
   onClick: () => void;
 }
 
-export function Chip({ bottom, label, state, stateColor, title, onClick }: ChipProps) {
+export function Chip({ bottom, label, state, stateColor, title, opens, onClick }: ChipProps) {
+  const style: React.CSSProperties = opens
+    ? { ...base, bottom, border: '1px solid rgba(79,216,255,0.45)' }
+    : { ...base, bottom };
   return (
-    <div style={{ ...base, bottom }} onClick={onClick} title={title}>
+    <div style={style} onClick={onClick} title={title}>
       <span>{label}</span>
       <span style={{ flex: 1 }} />
       {state !== undefined && <span style={{ color: stateColor ?? CHIP_CYAN }}>{state}</span>}
+      {opens && <span style={{ color: CHIP_CYAN, opacity: 0.75, marginLeft: 1 }}>›</span>}
     </div>
   );
 }

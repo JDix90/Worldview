@@ -204,6 +204,7 @@ export function LocationChip({ open, onOpenChange, chipVisible, bottom }: Locati
         label={flash ? <span style={{ color: CHIP_GREEN }}>{flash}</span> : 'LOCATION'}
         state={flash ? undefined : '⌖'}
         stateColor={CHIP_CYAN}
+        opens
         title="Set the home location (city/zip, or empty = globe center) — anchors the appliance display and the HOME dashboard"
         onClick={() => (flash ? undefined : onOpenChange(!open))}
       />

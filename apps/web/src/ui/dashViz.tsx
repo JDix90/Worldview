@@ -1,8 +1,9 @@
 /**
- * Small SVG micro-visuals for the HOME dashboard (2026-07-22, DECISIONS #111).
+ * Small micro-visuals for the HOME dashboard (2026-07-22, DECISIONS #111).
  * Each renders from data the modal already fetches — no new server surface
  * (DECISIONS #97). Kept deliberately tiny: a glance, not a chart.
  */
+import { useEffect, useRef } from 'react';
 
 const CYAN = '#4fd8ff';
 const AMBER = '#ffb300';
@@ -191,5 +192,125 @@ export function AqiBar({ aqi }: { aqi: number }) {
       />
       <line x1={pos * W} y1={0} x2={pos * W} y2={H} stroke="#e8eef3" strokeWidth={1.5} />
     </svg>
+  );
+}
+
+// ── Crime density preview ─────────────────────────────────────────────────
+// A KDE-style heat map of recent incidents around home, drawn on canvas: the
+// dashboard's entry point to the full crime map (design review #114 — it used
+// to be a 10px text link buried in a junk-drawer section). Same colour ramp as
+// the Pi panel's CRIME slide so the two surfaces read as one instrument.
+const HEAT_STOPS = [0, 0.15, 0.4, 0.7, 1];
+const HEAT_R = [6, 25, 79, 255, 255];
+const HEAT_G = [14, 80, 216, 179, 70];
+const HEAT_B = [22, 120, 255, 10, 70];
+/** Vertical half-span of the preview window, in miles. */
+const HEAT_HALF_MI = 8;
+
+function rampAt(t: number, ch: number[]): number {
+  for (let i = 1; i < HEAT_STOPS.length; i++) {
+    if (t <= HEAT_STOPS[i]!) {
+      const span = HEAT_STOPS[i]! - HEAT_STOPS[i - 1]!;
+      const f = span > 0 ? (t - HEAT_STOPS[i - 1]!) / span : 0;
+      return ch[i - 1]! + f * (ch[i]! - ch[i - 1]!);
+    }
+  }
+  return ch[ch.length - 1]!;
+}
+
+export interface HeatPoint {
+  lat: number;
+  lon: number;
+}
+
+export function CrimeHeat({
+  points,
+  home,
+  width,
+  height = 92,
+}: {
+  points: HeatPoint[];
+  home: { lat: number; lon: number };
+  width: number;
+  height?: number;
+}) {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const cv = ref.current;
+    if (!cv) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    cv.width = Math.round(width * dpr);
+    cv.height = Math.round(height * dpr);
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    const W = cv.width;
+    const H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+
+    // 1) accumulate density into a float buffer. Canvas 'lighter' compositing
+    //    was tried first and clips at 8-bit alpha — with a few hundred city
+    //    incidents the core saturates and the map degrades to one flat blob.
+    const miPerPx = (2 * HEAT_HALF_MI) / H;
+    const cosLat = Math.cos((home.lat * Math.PI) / 180);
+    const density = new Float32Array(W * H);
+    const sigma = Math.max(3, H / 22);
+    const rad = Math.ceil(sigma * 2.5);
+    const kernel = new Float32Array((2 * rad + 1) * (2 * rad + 1));
+    for (let ky = -rad; ky <= rad; ky++) {
+      for (let kx = -rad; kx <= rad; kx++) {
+        kernel[(ky + rad) * (2 * rad + 1) + (kx + rad)] =
+          Math.exp(-(kx * kx + ky * ky) / (2 * sigma * sigma));
+      }
+    }
+    for (const p of points) {
+      const dx = (p.lon - home.lon) * 69.0 * cosLat;
+      const dy = (p.lat - home.lat) * 69.0;
+      const cx = Math.round(W / 2 + dx / miPerPx);
+      const cy = Math.round(H / 2 - dy / miPerPx);
+      const x0 = Math.max(0, cx - rad);
+      const x1 = Math.min(W - 1, cx + rad);
+      const y0 = Math.max(0, cy - rad);
+      const y1 = Math.min(H - 1, cy + rad);
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          density[y * W + x]! += kernel[(y - cy + rad) * (2 * rad + 1) + (x - cx + rad)]!;
+        }
+      }
+    }
+
+    // 2) normalise and map through the ramp
+    let peak = 0;
+    for (let i = 0; i < density.length; i++) if (density[i]! > peak) peak = density[i]!;
+    const img = ctx.createImageData(W, H);
+    const d = img.data;
+    for (let i = 0; i < density.length; i++) {
+      const t = peak > 0 ? Math.pow(density[i]! / peak, 0.55) : 0;
+      const o = i * 4;
+      d[o] = rampAt(t, HEAT_R);
+      d[o + 1] = rampAt(t, HEAT_G);
+      d[o + 2] = rampAt(t, HEAT_B);
+      d[o + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+
+    // 3) home marker — matches OverheadRadar's ringed amber dot
+    ctx.strokeStyle = '#ffd27f';
+    ctx.lineWidth = 1.2 * dpr;
+    ctx.beginPath();
+    ctx.arc(W / 2, H / 2, 4 * dpr, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = '#ffd27f';
+    ctx.beginPath();
+    ctx.arc(W / 2, H / 2, 1.5 * dpr, 0, Math.PI * 2);
+    ctx.fill();
+  }, [points, home.lat, home.lon, width, height]);
+
+  return (
+    <canvas
+      ref={ref}
+      style={{ width, height, display: 'block', borderRadius: 2 }}
+      aria-label="Recent crime density near home"
+    />
   );
 }

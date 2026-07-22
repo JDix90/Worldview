@@ -41,6 +41,7 @@ export function LayersPanel({ defs, enabled, onToggle, open, onOpenChange, chipV
         bottom={bottom}
         label="LAYERS"
         state={`${[...enabled].length}/${defs.length}`}
+        opens
         title="Show or hide globe data layers"
         onClick={() => onOpenChange(true)}
       />

@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import type { Severity, Signal } from '@orrery/shared';
 import { apiGet } from '../feed/api';
 import { DEBUG_UI } from '../prefs';
+import { Chip, CHIP_DIM } from './Chip';
 
 interface FeedSignal extends Signal {
   assessment: {
@@ -107,9 +108,12 @@ function MarkdownLite({ text }: { text: string }) {
 interface FeedPanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Chip hides while another right-dock panel is open (one surface at a time). */
+  chipVisible: boolean;
+  bottom: number;
 }
 
-export function FeedPanel({ open, onOpenChange }: FeedPanelProps) {
+export function FeedPanel({ open, onOpenChange, chipVisible, bottom }: FeedPanelProps) {
   const [tab, setTab] = useState<'signals' | 'briefing'>('signals');
   const [signals, setSignals] = useState<FeedSignal[]>([]);
   const [briefing, setBriefing] = useState<Briefing | null>(null);
@@ -162,18 +166,19 @@ export function FeedPanel({ open, onOpenChange }: FeedPanelProps) {
   ).length;
 
   if (!open) {
+    // Lives in the bottom-right cluster with the other surfaces — it used to
+    // sit orphaned in the top-right corner (design review #114).
+    if (!chipVisible) return null;
     return (
-      <div
+      <Chip
+        bottom={bottom}
+        label="FEED"
+        state={badge > 0 ? <span style={{ color: SEV_COLOR.S2 }}>●{badge}</span> : '—'}
+        stateColor={CHIP_DIM}
+        opens
+        title="Signals and the daily briefing"
         onClick={() => onOpenChange(true)}
-        style={{
-          position: 'fixed', top: 10, right: 12, cursor: 'pointer',
-          font: `11px ${mono}`, color: 'rgba(143,163,184,0.85)',
-          padding: '4px 10px', border: '1px solid rgba(79,216,255,0.25)',
-          borderRadius: 3, background: 'rgba(6,10,16,0.7)', userSelect: 'none',
-        }}
-      >
-        FEED{badge > 0 && <span style={{ color: SEV_COLOR.S2 }}> ●{badge}</span>}
-      </div>
+      />
     );
   }
 

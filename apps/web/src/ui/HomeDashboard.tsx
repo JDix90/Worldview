@@ -12,7 +12,7 @@ import { fetchSpaceWeather, auroraVerdict, type SpaceWeather } from '../sky/spac
 import { nextIssPasses, type Pass } from '../sky/passes';
 import { sublunarPoint } from '../globe/lunar';
 import { Chip } from './Chip';
-import { OverheadRadar, MoonDisc, AqiBar } from './dashViz';
+import { OverheadRadar, MoonDisc, AqiBar, CrimeHeat } from './dashViz';
 import { CrimeMap } from './CrimeMap';
 import { sourceForHome, fetchRecentCached, type CrimeIncident } from '../feed/crime';
 
@@ -33,6 +33,19 @@ const panelStyle: React.CSSProperties = {
   borderRadius: 4,
   backdropFilter: 'blur(4px)',
   userSelect: 'none',
+};
+
+/** Panel content width (panel 330 − 12px padding each side). */
+const PANEL_INNER_W = 306;
+
+/** Interactive rows look like buttons now — they used to be indistinguishable
+ *  from static labels, which is how the crime map went unfound (review #114). */
+const actionStyle: React.CSSProperties = {
+  cursor: 'pointer',
+  color: '#4fd8ff',
+  border: '1px solid rgba(79,216,255,0.3)',
+  borderRadius: 3,
+  padding: '0 6px',
 };
 
 const CYAN = '#4fd8ff';
@@ -320,6 +333,22 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
     return () => clearInterval(condTimer.current);
   }, [open, homeKey]);
 
+  // Scroll cue: the panel is taller than the viewport and had no hint that
+  // anything existed below the fold (design review #114). Declared before the
+  // collapsed-chip early return below — hooks must run on every render.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [atEnd, setAtEnd] = useState(true);
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setAtEnd(el.scrollTop + el.clientHeight >= el.scrollHeight - 8);
+  };
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!open || !el) return;
+    setAtEnd(el.scrollHeight - el.clientHeight <= 8);
+  }, [open, sum, crime, cond, wx, passes]);
+
   const flyHome = () => {
     const g = (window as { __ORRERY__?: { globe?: { pointOfView(p: object, ms: number): void } } }).__ORRERY__?.globe;
     if (g && sum?.home) g.pointOfView({ lat: sum.home.lat, lng: sum.home.lon, altitude: 1.0 }, 900);
@@ -337,7 +366,8 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
         bottom={bottom}
         label="HOME"
         state={<span style={{ width: 8, height: 8, borderRadius: 4, background: dotColor, display: 'inline-block' }} />}
-        title="What's happening around your home location"
+        opens
+        title="What's happening around your home location — weather, overhead traffic, crime map, sky"
         onClick={() => onOpenChange(true)}
       />
     );
@@ -349,32 +379,48 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
   const far = (sum?.signals ?? []).length - near.length;
 
   return (
-    <div style={panelStyle}>
+    <>
+    <div style={panelStyle} ref={scrollRef} onScroll={onScroll}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
         <span style={{ width: 8, height: 8, borderRadius: 4, background: dot, alignSelf: 'center' }} />
         <span style={{ color: CYAN, fontWeight: 600, letterSpacing: 1 }}>HOME</span>
         <span style={{ opacity: 0.55 }}>{label || '—'}</span>
         <span style={{ flex: 1 }} />
-        <span onClick={flyHome} style={{ cursor: 'pointer', color: CYAN, opacity: 0.85 }} title="Point the globe at home">
-          ⤓ fly
+        <span onClick={flyHome} style={actionStyle} title="Point the globe at home">
+          ⤓ fly ›
         </span>
         <span onClick={() => onOpenChange(false)} style={{ cursor: 'pointer', opacity: 0.6, marginLeft: 8 }}>✕</span>
       </div>
 
-      {sum?.feed && (
-        <div style={{ opacity: 0.7, marginTop: 2 }}>
-          feed {sum.feed.live ? 'LIVE' : 'DOWN'} · {sum.feed.aircraft.toLocaleString()} aircraft ·{' '}
-          {sum.shadowS1Last24h ?? 0} S1/24h
-        </div>
-      )}
-
-      <Section title="WEATHER">
+      {/* NOW — the at-a-glance block: link health, weather, air quality */}
+      <Section title="NOW">
+        {sum?.feed && (
+          <div style={{ opacity: 0.7 }}>
+            feed {sum.feed.live ? 'LIVE' : 'DOWN'} · {sum.feed.aircraft.toLocaleString()} aircraft ·{' '}
+            {sum.shadowS1Last24h ?? 0} S1/24h
+          </div>
+        )}
         {wx ? (
-          <div>
-            {wx.tempF}°F <span style={{ opacity: 0.55 }}>(feels {wx.feelsF}°)</span> · {wx.word} · wind {wx.windMph} mph {wx.windDir}
+          <div style={{ marginTop: 2 }}>
+            <span style={{ fontSize: 15, color: '#e6eef6' }}>{wx.tempF}°F</span>{' '}
+            <span style={{ opacity: 0.55 }}>(feels {wx.feelsF}°)</span> · {wx.word} · wind {wx.windMph} mph {wx.windDir}
           </div>
         ) : (
-          <div style={{ opacity: 0.5 }}>loading…</div>
+          <div style={{ opacity: 0.5 }}>weather loading…</div>
+        )}
+        {cond.aqi ? (
+          (() => {
+            const [word, color] = aqiBand(cond.aqi.us);
+            return (
+              <div style={{ marginTop: 2 }}>
+                AQI <span style={{ color }}>{cond.aqi.us} — {word}</span>
+                <span style={{ opacity: 0.55 }}> · PM2.5 {cond.aqi.pm25} µg/m³</span>
+                <AqiBar aqi={cond.aqi.us} />
+              </div>
+            );
+          })()
+        ) : (
+          <div style={{ opacity: 0.5 }}>air quality loading…</div>
         )}
       </Section>
 
@@ -431,6 +477,48 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
         )}
       </Section>
 
+      {/* CRIME — promoted out of the old LOCAL CONDITIONS junk drawer to its
+          own section; the heat preview IS the button (design review #114). */}
+      {crimeSource && (
+        <Section
+          title="CRIME"
+          right={
+            Array.isArray(crime) ? (
+              <span style={{ opacity: 0.6 }}>{crime.length} · {CRIME_DAYS}d</span>
+            ) : undefined
+          }
+        >
+          {crime === 'unavailable' ? (
+            <div style={{ opacity: 0.45 }}>crime data unavailable</div>
+          ) : !Array.isArray(crime) ? (
+            <div style={{ opacity: 0.5 }}>loading…</div>
+          ) : (
+            <div
+              onClick={() => setCrimeOpen(true)}
+              title="Open the full city crime map"
+              style={{
+                cursor: 'pointer',
+                border: '1px solid rgba(79,216,255,0.3)',
+                borderRadius: 3,
+                padding: 3,
+                marginTop: 2,
+              }}
+            >
+              {sum?.home && (
+                <CrimeHeat points={crime} home={sum.home} width={PANEL_INNER_W - 8} height={88} />
+              )}
+              <div style={{ display: 'flex', alignItems: 'baseline', marginTop: 3, padding: '0 2px 1px' }}>
+                <span style={{ opacity: 0.6, fontSize: 10 }}>
+                  {crime.length} reported near you · {CRIME_DAYS}d
+                </span>
+                <span style={{ flex: 1 }} />
+                <span style={{ color: CYAN }}>open full map ›</span>
+              </div>
+            </div>
+          )}
+        </Section>
+      )}
+
       <Section title="NEARBY SIGNALS">
         {near.length === 0 ? (
           <div style={{ opacity: 0.6 }}>
@@ -462,7 +550,9 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
         )}
       </Section>
 
-      <Section title="LOCAL CONDITIONS">
+      {/* HAZARDS — only actual hazards now: airspace, weather alerts, fire.
+          Air quality moved up into NOW where it belongs. */}
+      <Section title="HAZARDS">
         {sum?.airport && (
           <div
             style={{
@@ -474,21 +564,6 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
             {sum.airport.detail ? ` · ${sum.airport.detail}` : ''}
             {sum.airport.reason ? ` — ${sum.airport.reason.toLowerCase()}` : ''}
           </div>
-        )}
-        {/* air quality */}
-        {cond.aqi ? (
-          (() => {
-            const [word, color] = aqiBand(cond.aqi.us);
-            return (
-              <div>
-                AQI <span style={{ color }}>{cond.aqi.us} — {word}</span>
-                <span style={{ opacity: 0.55 }}> · PM2.5 {cond.aqi.pm25} µg/m³</span>
-                <AqiBar aqi={cond.aqi.us} />
-              </div>
-            );
-          })()
-        ) : (
-          <div style={{ opacity: 0.5 }}>air quality loading…</div>
         )}
         {/* NWS alerts */}
         {cond.alerts.map((a, i) => {
@@ -511,21 +586,8 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
             <span style={{ opacity: 0.7 }}> · nearest {cond.fires.nearestMi}mi {cond.fires.nearestDir}</span>
           </div>
         )}
-        {/* recently reported crime (covered cities only — quiet absence elsewhere) */}
-        {crimeSource && crime === 'unavailable' && (
-          <div style={{ opacity: 0.45 }}>crime data unavailable</div>
-        )}
-        {crimeSource && Array.isArray(crime) && (
-          <div>
-            crime: {crime.length} reported · {CRIME_DAYS}d{' '}
-            <span
-              onClick={() => setCrimeOpen(true)}
-              style={{ cursor: 'pointer', color: CYAN, opacity: 0.9 }}
-              title="City map of recently reported crimes near home"
-            >
-              view map ›
-            </span>
-          </div>
+        {!sum?.airport && cond.alerts.length === 0 && (cond.fires === 'none' || cond.fires === null) && (
+          <div style={{ color: GREEN, opacity: 0.7 }}>nothing active near you</div>
         )}
       </Section>
 
@@ -654,5 +716,32 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
         />
       )}
     </div>
+    {/* fixed, matching the panel's own fixed box — the panel is position:fixed
+        so a relatively-positioned wrapper would not track it */}
+    {!atEnd && (
+      <div
+        style={{
+          position: 'fixed',
+          right: 12,
+          bottom: 14,
+          width: 330,
+          height: 26,
+          boxSizing: 'border-box',
+          pointerEvents: 'none',
+          borderRadius: '0 0 4px 4px',
+          background: 'linear-gradient(rgba(6,10,16,0) 0%, rgba(6,10,16,0.92) 70%)',
+          display: 'flex',
+          alignItems: 'flex-end',
+          justifyContent: 'center',
+          font: '10px ui-monospace, SFMono-Regular, Menlo, monospace',
+          color: CYAN,
+          opacity: 0.75,
+          paddingBottom: 3,
+        }}
+      >
+        ⌄ more
+      </div>
+    )}
+    </>
   );
 }
