@@ -13,6 +13,8 @@ import { nextIssPasses, type Pass } from '../sky/passes';
 import { sublunarPoint } from '../globe/lunar';
 import { Chip } from './Chip';
 import { OverheadRadar, MoonDisc, AqiBar } from './dashViz';
+import { CrimeMap } from './CrimeMap';
+import { sourceForHome, fetchRecentCached, type CrimeIncident } from '../feed/crime';
 
 const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 
@@ -231,6 +233,23 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
       });
     }
   }, [open, topKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // recently reported crime near home (registry of one — Denver; quiet
+  // absence elsewhere). One fetch powers the count line AND the map modal.
+  const CRIME_DAYS = 7;
+  const [crime, setCrime] = useState<CrimeIncident[] | 'unavailable' | null>(null);
+  const [crimeOpen, setCrimeOpen] = useState(false);
+  const crimeSource = sum?.home ? sourceForHome(sum.home.lat, sum.home.lon) : null;
+  useEffect(() => {
+    if (!open || !sum?.home) return;
+    const src = sourceForHome(sum.home.lat, sum.home.lon);
+    if (!src) { setCrime(null); return; }
+    let alive = true;
+    fetchRecentCached(src, sum.home.lat, sum.home.lon, CRIME_DAYS)
+      .then((d) => alive && setCrime(d))
+      .catch(() => alive && setCrime('unavailable'));
+    return () => { alive = false; };
+  }, [open, homeKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // local conditions: AQI + NWS alerts + FIRMS fires near home
   const condTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
@@ -492,6 +511,22 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
             <span style={{ opacity: 0.7 }}> · nearest {cond.fires.nearestMi}mi {cond.fires.nearestDir}</span>
           </div>
         )}
+        {/* recently reported crime (covered cities only — quiet absence elsewhere) */}
+        {crimeSource && crime === 'unavailable' && (
+          <div style={{ opacity: 0.45 }}>crime data unavailable</div>
+        )}
+        {crimeSource && Array.isArray(crime) && (
+          <div>
+            crime: {crime.length} reported · {CRIME_DAYS}d{' '}
+            <span
+              onClick={() => setCrimeOpen(true)}
+              style={{ cursor: 'pointer', color: CYAN, opacity: 0.9 }}
+              title="City map of recently reported crimes near home"
+            >
+              view map ›
+            </span>
+          </div>
+        )}
       </Section>
 
       <Section title="SKY TONIGHT">
@@ -605,6 +640,18 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
             </div>
           )}
         </Section>
+      )}
+
+      {crimeOpen && crimeSource && Array.isArray(crime) && sum?.home && (
+        <CrimeMap
+          incidents={crime}
+          home={sum.home}
+          homeLabel={label.replace(/^near\s+/i, '').split(',')[0] || 'home'}
+          sourceLabel={crimeSource.label}
+          attribution={crimeSource.attribution}
+          days={CRIME_DAYS}
+          onClose={() => setCrimeOpen(false)}
+        />
       )}
     </div>
   );
