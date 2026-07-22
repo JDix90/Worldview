@@ -8,27 +8,13 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { apiGet, apiPost } from '../feed/api';
+import { Chip, CHIP_GREEN, CHIP_CYAN } from './Chip';
 
 const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 
-const chip: React.CSSProperties = {
-  position: 'fixed',
-  bottom: 104,
-  right: 12,
-  cursor: 'pointer',
-  font: `11px ${mono}`,
-  color: 'rgba(143,163,184,0.85)',
-  padding: '4px 10px',
-  border: '1px solid rgba(79,216,255,0.25)',
-  borderRadius: 3,
-  background: 'rgba(6,10,16,0.7)',
-  userSelect: 'none',
-};
-
 const popover: React.CSSProperties = {
   position: 'fixed',
-  bottom: 100,
-  right: 86, // grows leftward — the chip hugs the screen edge
+  right: 144, // grows leftward — clears the 124px-wide chip + edge gap
   width: 240,
   padding: '8px 10px',
   font: `11px/1.6 ${mono}`,
@@ -132,9 +118,10 @@ interface LocationChipProps {
   onOpenChange: (open: boolean) => void;
   /** Chip hides while a right-dock panel is open (one surface at a time). */
   chipVisible: boolean;
+  bottom: number;
 }
 
-export function LocationChip({ open, onOpenChange, chipVisible }: LocationChipProps) {
+export function LocationChip({ open, onOpenChange, chipVisible, bottom }: LocationChipProps) {
   const [current, setCurrent] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [err, setErr] = useState(false);
@@ -191,7 +178,7 @@ export function LocationChip({ open, onOpenChange, chipVisible }: LocationChipPr
   return (
     <>
       {open && (
-        <div style={popover}>
+        <div style={{ ...popover, bottom: bottom - 4 }}>
           <input
             ref={inputRef}
             style={inputStyle}
@@ -212,17 +199,14 @@ export function LocationChip({ open, onOpenChange, chipVisible }: LocationChipPr
           </div>
         </div>
       )}
-      <div
-        style={{ ...chip, color: flash ? '#6be36b' : (chip.color as string) }}
-        onClick={() => (flash ? null : onOpenChange(!open))}
+      <Chip
+        bottom={bottom}
+        label={flash ? <span style={{ color: CHIP_GREEN }}>{flash}</span> : 'LOCATION'}
+        state={flash ? undefined : '⌖'}
+        stateColor={CHIP_CYAN}
         title="Set the home location (city/zip, or empty = globe center) — anchors the appliance display and the HOME dashboard"
-      >
-        {flash ?? (
-          <>
-            LOCATION <span style={{ color: '#4fd8ff' }}>⌖</span>
-          </>
-        )}
-      </div>
+        onClick={() => (flash ? undefined : onOpenChange(!open))}
+      />
     </>
   );
 }

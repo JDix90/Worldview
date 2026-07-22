@@ -11,22 +11,9 @@ import { fetchRoute } from '../feed/routes';
 import { fetchSpaceWeather, auroraVerdict, type SpaceWeather } from '../sky/spaceWeather';
 import { nextIssPasses, type Pass } from '../sky/passes';
 import { sublunarPoint } from '../globe/lunar';
+import { Chip } from './Chip';
 
 const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
-
-const chipStyle: React.CSSProperties = {
-  position: 'fixed',
-  bottom: 134,
-  right: 12,
-  cursor: 'pointer',
-  font: `11px ${mono}`,
-  color: 'rgba(143,163,184,0.85)',
-  padding: '4px 10px',
-  border: '1px solid rgba(79,216,255,0.25)',
-  borderRadius: 3,
-  background: 'rgba(6,10,16,0.7)',
-  userSelect: 'none',
-};
 
 const panelStyle: React.CSSProperties = {
   position: 'fixed',
@@ -149,9 +136,10 @@ interface HomeDashboardProps {
   onOpenChange: (open: boolean) => void;
   /** Chip hides while another right-dock panel is open (one surface at a time). */
   chipVisible: boolean;
+  bottom: number;
 }
 
-export function HomeDashboard({ open, onOpenChange, chipVisible }: HomeDashboardProps) {
+export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeDashboardProps) {
   const [sum, setSum] = useState<Summary | null>(null);
   const [label, setLabel] = useState<string>('');
   const [wx, setWx] = useState<Weather | null>(null);
@@ -317,16 +305,25 @@ export function HomeDashboard({ open, onOpenChange, chipVisible }: HomeDashboard
     if (g && sum?.home) g.pointOfView({ lat: sum.home.lat, lng: sum.home.lon, altitude: 1.0 }, 900);
   };
 
+  const chipStatus = sum ? statusOf(sum) : 'green';
+
   if (!open) {
     if (!chipVisible) return null;
+    // The status dot lets the chip report red/amber/green at a glance without
+    // opening the dashboard.
+    const dotColor = { red: RED, amber: AMBER, green: GREEN }[chipStatus];
     return (
-      <div style={chipStyle} onClick={() => onOpenChange(true)} title="What's happening around your home location">
-        HOME <span style={{ color: CYAN }}>▣</span>
-      </div>
+      <Chip
+        bottom={bottom}
+        label="HOME"
+        state={<span style={{ width: 8, height: 8, borderRadius: 4, background: dotColor, display: 'inline-block' }} />}
+        title="What's happening around your home location"
+        onClick={() => onOpenChange(true)}
+      />
     );
   }
 
-  const st = sum ? statusOf(sum) : 'green';
+  const st = chipStatus;
   const dot = { red: RED, amber: AMBER, green: GREEN }[st];
   const near = (sum?.signals ?? []).filter((x) => x.distMi != null && x.distMi < 500);
   const far = (sum?.signals ?? []).length - near.length;

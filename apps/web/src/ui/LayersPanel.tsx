@@ -3,22 +3,9 @@
  * with data attribution. Enabled-set persists via layers/registry.
  */
 import type { LayerDef } from '../layers/registry';
+import { Chip } from './Chip';
 
 const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
-
-const chip: React.CSSProperties = {
-  position: 'fixed',
-  bottom: 14,
-  right: 12,
-  cursor: 'pointer',
-  font: `11px ${mono}`,
-  color: 'rgba(143,163,184,0.85)',
-  padding: '4px 10px',
-  border: '1px solid rgba(79,216,255,0.25)',
-  borderRadius: 3,
-  background: 'rgba(6,10,16,0.7)',
-  userSelect: 'none',
-};
 
 const panel: React.CSSProperties = {
   position: 'fixed',
@@ -43,16 +30,20 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   /** Chip hides while another right-dock panel is open (one surface at a time). */
   chipVisible: boolean;
+  bottom: number;
 }
 
-export function LayersPanel({ defs, enabled, onToggle, open, onOpenChange, chipVisible }: Props) {
+export function LayersPanel({ defs, enabled, onToggle, open, onOpenChange, chipVisible, bottom }: Props) {
   if (!open) {
     if (!chipVisible) return null;
     return (
-      <div style={chip} onClick={() => onOpenChange(true)}>
-        LAYERS <span style={{ color: '#4fd8ff' }}>●{[...enabled].length}</span>
-        <span style={{ opacity: 0.5 }}>/{defs.length}</span>
-      </div>
+      <Chip
+        bottom={bottom}
+        label="LAYERS"
+        state={`${[...enabled].length}/${defs.length}`}
+        title="Show or hide globe data layers"
+        onClick={() => onOpenChange(true)}
+      />
     );
   }
 

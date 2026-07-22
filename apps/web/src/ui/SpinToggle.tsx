@@ -1,36 +1,25 @@
 /**
- * Auto-rotate toggle — a chip stacked just above the LAYERS chip. Pausing is
+ * Auto-rotate toggle — part of the bottom-right control cluster. Pausing is
  * permanent until re-enabled (the drag-pause/resume behavior only applies
  * while spin is enabled).
  */
-const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
-
-const chip: React.CSSProperties = {
-  position: 'fixed',
-  bottom: 44,
-  right: 12,
-  cursor: 'pointer',
-  font: `11px ${mono}`,
-  color: 'rgba(143,163,184,0.85)',
-  padding: '4px 10px',
-  border: '1px solid rgba(79,216,255,0.25)',
-  borderRadius: 3,
-  background: 'rgba(6,10,16,0.7)',
-  userSelect: 'none',
-};
+import { Chip, CHIP_CYAN, CHIP_DIM } from './Chip';
 
 interface Props {
   enabled: boolean;
   onToggle: () => void;
+  bottom: number;
 }
 
-export function SpinToggle({ enabled, onToggle }: Props) {
+export function SpinToggle({ enabled, onToggle, bottom }: Props) {
   return (
-    <div style={{ ...chip, opacity: enabled ? 1 : 0.6 }} onClick={onToggle}>
-      SPIN{' '}
-      <span style={{ color: enabled ? '#4fd8ff' : 'rgba(143,163,184,0.6)' }}>
-        {enabled ? '◉' : '○'}
-      </span>
-    </div>
+    <Chip
+      bottom={bottom}
+      label="SPIN"
+      state={enabled ? 'ON' : 'OFF'}
+      stateColor={enabled ? CHIP_CYAN : CHIP_DIM}
+      title={enabled ? 'Globe auto-rotates — click to pause' : 'Auto-rotate paused — click to resume'}
+      onClick={onToggle}
+    />
   );
 }

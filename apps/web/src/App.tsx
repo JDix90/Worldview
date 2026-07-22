@@ -92,12 +92,14 @@ export function App() {
         />
       )}
       {card && !selectedHex && <ObjectCard card={card} onClose={() => setCard(null)} />}
+      {/* bottom-right control cluster — one aligned stack, 30px steps up from
+          the LAYERS base (fresh-eyes review 2026-07-22 / DECISIONS #110) */}
       <FeedPanel open={openPanel === 'feed'} onOpenChange={(v) => setOpenPanel(v ? 'feed' : null)} />
-      <HomeDashboard {...panelProps('home')} />
-      <LocationChip {...panelProps('location')} />
-      {openPanel === null && <ScreenToggle />}
-      {openPanel === null && <SpinToggle enabled={spinEnabled} onToggle={toggleSpin} />}
-      <LayersPanel defs={layerDefs} enabled={layersEnabled} onToggle={toggleLayer} {...panelProps('layers')} />
+      <HomeDashboard {...panelProps('home')} bottom={134} />
+      <LocationChip {...panelProps('location')} bottom={104} />
+      {openPanel === null && <ScreenToggle bottom={74} />}
+      {openPanel === null && <SpinToggle enabled={spinEnabled} onToggle={toggleSpin} bottom={44} />}
+      <LayersPanel defs={layerDefs} enabled={layersEnabled} onToggle={toggleLayer} {...panelProps('layers')} bottom={14} />
     </>
   );
 }
