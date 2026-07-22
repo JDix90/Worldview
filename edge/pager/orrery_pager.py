@@ -338,6 +338,10 @@ def fetch_local_conditions(lat: float, lon: float) -> dict:
     except Exception as e:
         print(f"[display] kp fetch failed: {e}", file=sys.stderr)
     try:
+        out["radar"] = fetch_radar(lat, lon)
+    except Exception as e:
+        print(f"[display] radar fetch failed: {e}", file=sys.stderr)
+    try:
         import sky
 
         now_ms = time.time() * 1000
@@ -483,10 +487,12 @@ def _ticker_index(n: int, now: Optional[float] = None) -> int:
 
 
 def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
-           conditions: Optional[dict] = None) -> Image.Image:
+           conditions: Optional[dict] = None, page_name: Optional[str] = None) -> Image.Image:
     img = Image.new("RGB", (L.w, L.h), BG)
     d = ImageDraw.Draw(img)
-    page = PAGES[page_idx]
+    # page_name overrides the static table: conditional pages (RADAR) exist
+    # only in a computed rotation, and fixtures render them directly.
+    page = page_name or PAGES[page_idx]
 
     # header bar. On battery it takes over: a house power cut is the one thing
     # this appliance knows that no other screen in a dark room does, and it was
@@ -527,13 +533,14 @@ def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
     s = summary.raw
     c = conditions or {}
     # pages driven by the conditions bundle (weather/aqi/sky/space/crime)
-    if page in ("NOW", "CRIME", "HAZARDS", "SKY", "SPACE"):
+    if page in ("NOW", "CRIME", "HAZARDS", "SKY", "SPACE", "RADAR"):
         {
             "NOW": _page_now,
             "CRIME": _page_crime,
             "HAZARDS": _page_hazards,
             "SKY": _page_sky,
             "SPACE": _page_space,
+            "RADAR": _page_radar,
         }[page](d, s, c, L)
     else:
         {
@@ -1020,6 +1027,144 @@ def _osm_mosaic(lat: float, lon: float, z: int, w: int, h: int):
     # beside pages whose background luminance is ~12/255, so a bright map
     # rectangle reads as a glowing patch at night.
     return ImageEnhance.Brightness(img).enhance(0.62)
+
+
+# ── RainViewer precip radar (Phase 1 B3, DECISIONS #120) ────────────────
+# Keyless, CORS-open, ~10-minute frames (verified 2026-07-22). Used only in
+# the home-local context: GIBS IMERG stays the globe's global drape, but it
+# lags hours — for "is that rain about to hit the house", RainViewer is the
+# only furniture-rule option. Radar tiles are cached per-frame and old frames
+# pruned, so steady-state traffic is a handful of tiles per 10-minute frame.
+RADAR_ZOOM = 7           # ≈450 km across at 480px — regional storm context
+RADAR_NEAR_MI = 40.0     # "precip near home" threshold for the carousel rule
+RADAR_CACHE = os.path.expanduser("~/.cache/orrery/radar")
+_RADAR_INDEX_URL = "https://api.rainviewer.com/public/weather-maps.json"
+
+
+def fetch_radar(lat: float, lon: float) -> dict:
+    """Latest radar frame + is-precip-near-home. {} when unavailable.
+
+    Nearness is measured on the single z6 tile containing home: at Denver's
+    latitude one pixel ≈ 1.7 km, so a 24 px radius ≈ RADAR_NEAR_MI. Echo =
+    alpha > 60 (RainViewer renders transparent where there is no return).
+    """
+    import math
+
+    try:
+        idx = requests.get(_RADAR_INDEX_URL, timeout=8).json()
+        past = (idx.get("radar") or {}).get("past") or []
+        if not past:
+            return {}
+        frame = past[-1]
+        host = idx.get("host", "https://tilecache.rainviewer.com")
+        z = 6
+        fx, fy = _tile_xy(lat, lon, z)
+        tile = _fetch_radar_tile(host, frame["path"], z, int(fx), int(fy))
+        frac = 0.0
+        if tile is not None:
+            a = tile.split()[-1]
+            px, py = int((fx % 1) * TILE_PX), int((fy % 1) * TILE_PX)
+            # ground resolution: world is 256·2^z px around ≈40075 km·cos(lat)
+            km_per_px = 40075.0 * math.cos(math.radians(lat)) / (TILE_PX * (2 ** z))
+            rad_px = max(8, int(RADAR_NEAR_MI * 1.609 / km_per_px))
+            x0, y0 = max(0, px - rad_px), max(0, py - rad_px)
+            x1, y1 = min(TILE_PX, px + rad_px), min(TILE_PX, py + rad_px)
+            window = a.crop((x0, y0, x1, y1))
+            hist = window.histogram()
+            echo = sum(hist[61:])
+            total = max(1, (x1 - x0) * (y1 - y0))
+            frac = echo / total
+        return {"ts": frame.get("time"), "path": frame["path"], "host": host,
+                "near": frac > 0.01, "frac": round(frac, 4)}
+    except Exception as e:
+        print(f"[display] radar index failed: {e}", file=sys.stderr)
+        return {}
+
+
+def _fetch_radar_tile(host: str, path: str, z: int, x: int, y: int):
+    """One RainViewer tile (RGBA), disk-cached per frame; prunes old frames."""
+    frame_key = path.rsplit("/", 1)[-1]
+    fpath = os.path.join(RADAR_CACHE, frame_key, f"{z}_{x}_{y}.png")
+    if os.path.exists(fpath):
+        try:
+            return Image.open(fpath).convert("RGBA")
+        except Exception:
+            pass
+    try:
+        # color scheme 2 (universal blue), smoothed, snow shown
+        r = requests.get(f"{host}{path}/256/{z}/{x}/{y}/2/1_1.png",
+                         headers={"User-Agent": TILE_UA}, timeout=8)
+        r.raise_for_status()
+        os.makedirs(os.path.dirname(fpath), exist_ok=True)
+        with open(fpath, "wb") as f:
+            f.write(r.content)
+        # prune all but the two newest frame dirs — bounded cache, no cron
+        try:
+            frames = sorted(os.listdir(RADAR_CACHE))
+            for old in frames[:-2]:
+                import shutil
+                shutil.rmtree(os.path.join(RADAR_CACHE, old), ignore_errors=True)
+        except Exception:
+            pass
+        import io
+        return Image.open(io.BytesIO(r.content)).convert("RGBA")
+    except Exception as e:
+        print(f"[display] radar tile {z}/{x}/{y} failed: {e}", file=sys.stderr)
+        return None
+
+
+def _page_radar(d, s, c, L: Layout) -> None:
+    """Regional precip radar centred on home — appears in the rotation only
+    while echoes are near (the attention-aware carousel decides)."""
+    y0 = L.header_h + L.pad
+    d.text((L.pad, y0), "RADAR", font=L.sm, fill=CYAN)
+    radar = c.get("radar") or {}
+    home = s.get("home") or {}
+    hlat, hlon = home.get("lat"), home.get("lon")
+    if not radar or hlat is None:
+        d.text((L.pad, L.h // 2 - 8), "radar unavailable", font=L.md, fill=DIM)
+        return
+    if radar.get("ts"):
+        age_min = max(0, int((time.time() - radar["ts"]) / 60))
+        tag = f"frame {age_min}m ago"
+        d.text((L.w - L.pad - d.textlength(tag, font=L.sm), y0), tag, font=L.sm, fill=DIM)
+
+    RX0, RY0 = L.pad, y0 + L.line_sm + 4
+    RW = L.w - 2 * L.pad
+    RH = L.h - L.footer_h - 4 - RY0
+    if RW < 20 or RH < 20:
+        return
+    img = getattr(d, "_image", None)
+    base = _osm_mosaic(hlat, hlon, RADAR_ZOOM, RW, RH)
+    if base is None or img is None:
+        d.text((RX0, RY0 + RH // 2), "basemap unavailable", font=L.sm, fill=DIM)
+        return
+    # radar overlay at the same zoom/offset math as the basemap
+    cx, cy = _tile_xy(hlat, hlon, RADAR_ZOOM)
+    ox = cx * TILE_PX - RW / 2.0
+    oy = cy * TILE_PX - RH / 2.0
+    n = 2 ** RADAR_ZOOM
+    overlay = Image.new("RGBA", (RW, RH), (0, 0, 0, 0))
+    for tx in range(int(ox // TILE_PX), int((ox + RW) // TILE_PX) + 1):
+        for ty in range(int(oy // TILE_PX), int((oy + RH) // TILE_PX) + 1):
+            if ty < 0 or ty >= n:
+                continue
+            t = _fetch_radar_tile(radar["host"], radar["path"], RADAR_ZOOM, tx % n, ty)
+            if t is not None:
+                overlay.paste(t, (int(tx * TILE_PX - ox), int(ty * TILE_PX - oy)), t)
+    base = base.convert("RGBA")
+    base.alpha_composite(overlay)
+    img.paste(base.convert("RGB"), (RX0, RY0))
+    d.rectangle((RX0, RY0, RX0 + RW - 1, RY0 + RH - 1), outline=PANEL)
+    # home marker, matching the crime page
+    hx, hy = RX0 + RW // 2, RY0 + RH // 2
+    d.ellipse((hx - 5, hy - 5, hx + 5, hy + 5), outline=WHITE)
+    d.ellipse((hx - 1, hy - 1, hx + 2, hy + 2), fill=WHITE)
+    if not radar.get("near"):
+        d.text((RX0 + 4, RY0 + 2), "no echoes near home", font=L.sm, fill=DIM)
+    attrib = "RainViewer · © OpenStreetMap"
+    d.text((RX0 + RW - d.textlength(attrib, font=L.sm) - 4, RY0 + RH - L.line_sm - 2),
+           attrib, font=L.sm, fill=DIM)
 
 
 # Zoom for the panel map: z11 ≈ city-wide at 480px, matching the browser CITY.
@@ -1738,6 +1883,7 @@ def _mock_fixtures(data: dict) -> dict:
     home = data.get("home") or {}
     if home.get("lat") is not None:
         calm["crime"] = fetch_crime(home["lat"], home["lon"])
+        calm["radar"] = fetch_radar(home["lat"], home["lon"])
 
     alerts = dict(calm, alerts=[
         {"event": "Air Quality Alert", "severity": "Unknown", "until": "16:00"},
@@ -1754,6 +1900,11 @@ def _mock_fixtures(data: dict) -> dict:
         "critical": {"sysinfo": critical, "cond": calm,    "ok": True},
         "aurora":   {"sysinfo": ac,       "cond": aurora,  "ok": True},
         "offline":  {"sysinfo": ac,       "cond": calm,    "ok": False},
+        # same live frame, but with `near` forced so the RADAR page and the
+        # carousel's insertion rule are exercisable on a dry day
+        "radar":    {"sysinfo": ac,
+                     "cond": dict(calm, radar=dict(calm.get("radar") or {}, near=True)),
+                     "ok": True},
     }
 
 
@@ -1803,10 +1954,11 @@ def main() -> None:
                 fetched_at=time.time() - (0 if fx["ok"] else 500),
                 ok=fx["ok"],
             )
-            for i in range(len(PAGES)):
-                page = PAGES[i].lower().replace(" ", "_")
-                render(summ, i, fx["sysinfo"], L, fx["cond"]).save(
-                    os.path.join(outdir, f"{page}.png"))
+            page_names = list(PAGES) + (["RADAR"] if fx["cond"].get("radar") else [])
+            for i, pname in enumerate(page_names):
+                fname_png = pname.lower().replace(" ", "_") + ".png"
+                render(summ, min(i, len(PAGES) - 1), fx["sysinfo"], L, fx["cond"],
+                       page_name=pname).save(os.path.join(outdir, fname_png))
                 total += 1
         print(f"wrote {total} PNGs across {len(names)} fixture(s) to {args.mock} at {w}x{h}")
         return
