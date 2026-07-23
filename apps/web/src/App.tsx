@@ -10,8 +10,11 @@ import { ScreenToggle } from './ui/ScreenToggle';
 import { LocationChip } from './ui/LocationChip';
 import { HomeDashboard } from './ui/HomeDashboard';
 import { FlightSearch } from './ui/FlightSearch';
+import { CrimeMap } from './ui/CrimeMap';
+import { Chip } from './ui/Chip';
 import { AircraftStore } from './feed/aircraftStore';
 import { useAircraftFeed } from './feed/useAircraftFeed';
+import { useCityMap, CRIME_DAYS } from './feed/useCityMap';
 import { buildLayerDefs } from './layers';
 import { loadEnabled, saveEnabled, type LayerCard } from './layers/registry';
 import { loadPrefs, savePrefs } from './prefs';
@@ -34,6 +37,9 @@ export function App() {
     onOpenChange: (v: boolean) => setOpenPanel(v ? id : null),
     chipVisible: openPanel === null,
   });
+  // CITY map (crime + cameras) — owned here so the bottom-right CITY chip and
+  // the HOME dashboard's CITY section share one modal and one fetch (#124).
+  const city = useCityMap();
   const [spinEnabled, setSpinEnabled] = useState(() => loadPrefs().spinEnabled);
   const toggleSpin = useCallback(() => {
     setSpinEnabled((prev) => {
@@ -110,8 +116,26 @@ export function App() {
       {openPanel === null && <ScreenToggle bottom={44} />}
       <LayersPanel defs={layerDefs} enabled={layersEnabled} onToggle={toggleLayer} {...panelProps('layers')} bottom={82} />
       <LocationChip {...panelProps('location')} bottom={112} />
-      <HomeDashboard {...panelProps('home')} bottom={142} />
-      <FeedPanel {...panelProps('feed')} bottom={172} />
+      <HomeDashboard {...panelProps('home')} bottom={142} city={city} />
+      {/* CITY opens a modal (not a panel), so it doesn't join openPanel; it
+          hides with the others while a panel is open, and only when home is a
+          covered city. This is the one-click path the section was buried from. */}
+      {openPanel === null && city.covered && (
+        <Chip bottom={172} label="CITY" opens title="Recent crime + mapped cameras near home" onClick={() => city.setOpen(true)} />
+      )}
+      <FeedPanel {...panelProps('feed')} bottom={202} />
+      {city.open && city.home && city.source && (
+        <CrimeMap
+          incidents={city.crime}
+          cameras={city.alpr}
+          home={city.home}
+          homeLabel={city.label.replace(/^near\s+/i, '').split(',')[0] || 'home'}
+          sourceLabel={city.source.label}
+          attribution={city.source.attribution}
+          days={CRIME_DAYS}
+          onClose={() => city.setOpen(false)}
+        />
+      )}
     </>
   );
 }

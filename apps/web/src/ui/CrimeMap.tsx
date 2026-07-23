@@ -82,11 +82,13 @@ function loadLayers(): LayerState {
 }
 
 interface Props {
-  /** Either layer may be 'unavailable' (upstream failure) — the other must
-   *  keep working. Verified the hard way: Denver ArcGIS timed out during
-   *  this feature's own verification while Overpass was healthy (#122). */
-  incidents: CrimeIncident[] | 'unavailable';
-  cameras: AlprCamera[] | 'unavailable';
+  /** Per layer: null = still loading · 'unavailable' = upstream failed · array
+   *  = data. Either may fail independently — the other must keep working
+   *  (Denver ArcGIS timed out live during this feature's own verification while
+   *  Overpass was healthy, #122). Opened from the CITY chip, both may briefly
+   *  be null while the shared fetch resolves (#124). */
+  incidents: CrimeIncident[] | 'unavailable' | null;
+  cameras: AlprCamera[] | 'unavailable' | null;
   home: { lat: number; lon: number };
   homeLabel: string;
   sourceLabel: string;
@@ -102,6 +104,10 @@ export function CrimeMap({ incidents, cameras, home, homeLabel, sourceLabel, att
   const z = PRESETS.find((p) => p.id === preset)!.z;
   const camList = Array.isArray(cameras) ? cameras : [];
   const incList = Array.isArray(incidents) ? incidents : [];
+  // "…" while loading, "—" when the upstream failed, else the count.
+  const chipCount = (v: unknown[] | 'unavailable' | null) =>
+    v === null ? '…' : v === 'unavailable' ? '—' : v.length;
+  const bothLoading = incidents === null && cameras === null;
 
   const toggleLayer = (k: keyof LayerState) => {
     setLayers((prev) => {
@@ -243,7 +249,7 @@ export function CrimeMap({ incidents, cameras, home, homeLabel, sourceLabel, att
               fontSize: 10,
             }}
           >
-            CRIME {incidents === 'unavailable' ? '—' : incList.length}
+            CRIME {chipCount(incidents)}
           </span>
           <span
             onClick={() => toggleLayer('cameras')}
@@ -257,7 +263,7 @@ export function CrimeMap({ incidents, cameras, home, homeLabel, sourceLabel, att
               fontSize: 10,
             }}
           >
-            CAMERAS {cameras === 'unavailable' ? '—' : camList.length}
+            CAMERAS {chipCount(cameras)}
           </span>
           <span style={{ flex: 1 }} />
           {PRESETS.map((p) => (
@@ -318,6 +324,21 @@ export function CrimeMap({ incidents, cameras, home, homeLabel, sourceLabel, att
           ))}
           {/* tint to sink the basemap behind the dots */}
           <div style={{ position: 'absolute', inset: 0, background: 'rgba(6,10,16,0.12)', pointerEvents: 'none' }} />
+          {bothLoading && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'rgba(200,214,229,0.7)',
+                pointerEvents: 'none',
+              }}
+            >
+              loading city data…
+            </div>
+          )}
           <svg
             width="100%"
             height={MAP_H}
