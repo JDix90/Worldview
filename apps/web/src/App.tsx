@@ -69,6 +69,14 @@ export function App() {
     setCard(c);
     if (c !== null) setSelectedHex(null);
   }, []);
+  // Search-select shows the path immediately: the reason you type a flight
+  // number is to see where it's been and where it's going. Plain globe
+  // clicks keep the path off until asked (handleSelect above).
+  const handleSearchSelect = useCallback((hex: string) => {
+    setSelectedHex(hex);
+    setRouteHex(hex);
+    setCard(null);
+  }, []);
 
   return (
     <>
@@ -83,7 +91,7 @@ export function App() {
         routeHex={routeHex}
       />
       <Hud store={store} feedStatus={status} />
-      <FlightSearch store={store} milStore={milStore} onSelect={handleSelect} />
+      <FlightSearch store={store} milStore={milStore} onSelect={handleSearchSelect} />
       {selectedHex && (
         <AircraftCard
           store={store}
