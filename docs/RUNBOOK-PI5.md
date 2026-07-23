@@ -122,8 +122,9 @@ Mac where the GPU lives.)
    (`rotate=90` = landscape 480×320. If the panel misbehaves on the fbtft
    route, the DRM fallback is `dtoverlay=piscreen,drm` — then the display
    service needs the DRM variant instead of `/dev/fbN`.)
-2. Reboot; confirm: `ls /sys/class/graphics/` → expect `fb1` (SPI panel);
-   `cat /sys/class/graphics/fb1/virtual_size` → `480,320`.
+2. Reboot; confirm: `ls /sys/class/graphics/` → expect **`fb0`** (SPI panel,
+   `fb_ili9486`; on the Pi 5 / trixie it enumerates as fb0, not fb1 as first
+   guessed — DECISIONS #94); `cat /sys/class/graphics/fb0/virtual_size` → `480,320`.
 3. Display service (renders the pager pages to the framebuffer, touch = page
    cycle):
    ```bash
@@ -133,8 +134,15 @@ Mac where the GPU lives.)
    sudo cp ~/Project_Worldview/edge/appliance/orrery-display.service /etc/systemd/system/
    sudo systemctl enable --now orrery-display
    ```
-4. Verify without a camera: `sudo cat /dev/fb1 > /tmp/fb.raw` then convert
-   RGB565→PNG on the Mac (or just eyeball the panel).
+4. Verify without a camera:
+   ```bash
+   ssh pi@orrery.local "sudo cat /dev/fb0 > /tmp/fb.raw"
+   scp pi@orrery.local:/tmp/fb.raw /tmp/ && python3 edge/appliance/fbshot.py /tmp/panel.png /tmp/fb.raw
+   ```
+   (`fbshot.py` needs numpy+Pillow; the Pi's pager venv has both.) When
+   comparing two grabs, dump to **distinct raw paths** and pass each
+   explicitly — identical aircraft counts across a long gap means you are
+   looking at a stale file, not a stuck panel (2026-07-22 lesson).
 
 ## §C. X1200 UPS monitor
 1. `sudo apt install -y python3-smbus2 python3-libgpiod i2c-tools`
