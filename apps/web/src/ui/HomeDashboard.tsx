@@ -15,6 +15,7 @@ import { Chip } from './Chip';
 import { OverheadRadar, MoonDisc, AqiBar, CrimeHeat } from './dashViz';
 import { CrimeMap } from './CrimeMap';
 import { sourceForHome, fetchRecentCached, type CrimeIncident } from '../feed/crime';
+import { fetchAlprCached, flockCount, type AlprCamera } from '../feed/alpr';
 
 const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 
@@ -264,6 +265,18 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
     return () => { alive = false; };
   }, [open, homeKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ALPR cameras (CITY map CAMERAS layer, #124). Independent of the crime
+  // fetch — an Overpass failure must never take the crime map down with it.
+  const [alpr, setAlpr] = useState<AlprCamera[] | 'unavailable' | null>(null);
+  useEffect(() => {
+    if (!open || !sum?.home) return;
+    let alive = true;
+    fetchAlprCached(sum.home.lat, sum.home.lon)
+      .then((d) => alive && setAlpr(d))
+      .catch(() => alive && setAlpr('unavailable'));
+    return () => { alive = false; };
+  }, [open, homeKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // local conditions: AQI + NWS alerts + FIRMS fires near home
   const condTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   useEffect(() => {
@@ -472,7 +485,18 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
           }
         >
           {crime === 'unavailable' ? (
-            <div style={{ opacity: 0.45 }}>crime data unavailable</div>
+            <div style={{ opacity: 0.45 }}>
+              crime data unavailable
+              {Array.isArray(alpr) && alpr.length > 0 && (
+                <span
+                  onClick={() => setCrimeOpen(true)}
+                  title="Open the city map (cameras layer only — crime feed is down)"
+                  style={{ cursor: 'pointer', color: CYAN, opacity: 0.9, marginLeft: 8 }}
+                >
+                  open city map ›
+                </span>
+              )}
+            </div>
           ) : !Array.isArray(crime) ? (
             <div style={{ opacity: 0.5 }}>loading…</div>
           ) : (
@@ -498,6 +522,15 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
                 <span style={{ color: CYAN }}>open full map ›</span>
               </div>
             </div>
+          )}
+          {/* CAMERAS layer teaser — community-mapped ALPRs (OSM/DeFlock, #124) */}
+          {Array.isArray(alpr) && alpr.length > 0 && (
+            <div style={{ opacity: 0.55, fontSize: 10, marginTop: 3 }}>
+              cameras: {alpr.length} ALPRs mapped nearby · {flockCount(alpr)} Flock — on the map
+            </div>
+          )}
+          {alpr === 'unavailable' && (
+            <div style={{ opacity: 0.4, fontSize: 10, marginTop: 3 }}>camera data unavailable</div>
           )}
         </Section>
       )}
@@ -704,9 +737,10 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom }: HomeD
         </Section>
       )}
 
-      {crimeOpen && crimeSource && Array.isArray(crime) && sum?.home && (
+      {crimeOpen && crimeSource && sum?.home && (Array.isArray(crime) || Array.isArray(alpr)) && (
         <CrimeMap
-          incidents={crime}
+          incidents={Array.isArray(crime) ? crime : 'unavailable'}
+          cameras={alpr ?? 'unavailable'}
           home={sum.home}
           homeLabel={label.replace(/^near\s+/i, '').split(',')[0] || 'home'}
           sourceLabel={crimeSource.label}
