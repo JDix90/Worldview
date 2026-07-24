@@ -72,21 +72,18 @@ export const transitLayer: CityLayerDef<TransitData> = {
     </>
   ),
 
-  detail: (item) => {
+  detailCard: (item) => {
     const v = item as TransitVehicle;
     const ageS = v.tsSec ? Math.max(0, Math.round(Date.now() / 1000 - v.tsSec)) : null;
-    return (
-      <span>
-        <span style={{ color: isRail(v.routeId) ? RAIL : BUS }}>
-          ▲ {v.routeId ? `route ${v.routeId}` : 'vehicle'}
-        </span>
-        <span style={{ opacity: 0.65 }}>
-          {v.label && ` · #${v.label}`}
-          {isRail(v.routeId) ? ' · rail' : ' · bus'}
-          {ageS !== null && ` · position ${ageS}s old`}
-        </span>
-      </span>
-    );
+    return {
+      kicker: isRail(v.routeId) ? '▲ RTD rail' : '▲ RTD bus',
+      title: v.routeId ? `Route ${v.routeId}` : 'Vehicle',
+      rows: [
+        ...(v.label ? [{ label: 'vehicle', value: `#${v.label}` }] : []),
+        ...(ageS !== null ? [{ label: 'position', value: `${ageS}s old` }] : []),
+        { label: 'note', value: 'position only — no predictions' },
+      ],
+    };
   },
 
   legend: (d) => {

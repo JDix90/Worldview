@@ -10,6 +10,7 @@ import { DEBUG_UI } from '../prefs';
 import { GateReview } from './GateReview';
 import { Journal } from './Journal';
 import { Chip, CHIP_DIM } from './Chip';
+import { pressable } from './uiKit';
 
 interface FeedSignal extends Signal {
   assessment: {
@@ -36,6 +37,7 @@ const SEV_COLOR: Record<Severity, string> = {
 
 const panel: React.CSSProperties = {
   position: 'fixed',
+  zIndex: 60, // above the CITY map portal (#132)
   top: 0,
   right: 0,
   bottom: 0,
@@ -191,7 +193,9 @@ export function FeedPanel({ open, onOpenChange, chipVisible, bottom }: FeedPanel
         {(['signals', 'briefing', 'journal'] as const).map((t) => (
           <span
             key={t}
-            onClick={() => setTab(t)}
+            className="orx-x"
+            {...pressable(() => setTab(t))}
+            aria-pressed={tab === t}
             style={{
               cursor: 'pointer', textTransform: 'uppercase', letterSpacing: 1,
               color: tab === t ? '#4fd8ff' : 'rgba(143,163,184,0.6)',
@@ -204,7 +208,8 @@ export function FeedPanel({ open, onOpenChange, chipVisible, bottom }: FeedPanel
         ))}
         <span style={{ flex: 1 }} />
         <span
-          onClick={() => setGateOpen(true)}
+          className="orx-x"
+          {...pressable(() => setGateOpen(true))}
           title="Go/No-Go review — the FOUNDATION §11 evidence"
           style={{ cursor: 'pointer', color: '#4fd8ff', opacity: 0.85, fontSize: 10 }}
         >

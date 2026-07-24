@@ -62,25 +62,21 @@ export const loiterLayer: CityLayerDef<LoiterData> = {
     </>
   ),
 
-  detail: (item) => {
+  detailCard: (item) => {
     const f = item as LoiterFlag;
     const fly = () => {
       const g = (window as { __ORRERY__?: { globe?: { pointOfView(p: object, ms: number): void } } }).__ORRERY__?.globe;
       if (g) g.pointOfView({ lat: f.lat, lng: f.lon, altitude: 0.35 }, 900);
     };
-    return (
-      <span>
-        <span style={{ color: VIOLET }}>◎ {f.callsign}</span>
-        {f.mil && <span style={{ color: '#ffb300' }}> MIL</span>}
-        <span style={{ opacity: 0.65 }}>
-          {' '}· dwelling {f.verdict.dwellMin}m within {f.verdict.radiusMi}mi
-          {f.altFt != null && ` · ${f.altFt.toLocaleString()} ft (${bandLabel(f.altFt)})`}
-        </span>
-        <span onClick={fly} style={{ cursor: 'pointer', color: '#4fd8ff', marginLeft: 8 }} title="Point the globe here">
-          ⤓ fly
-        </span>
-      </span>
-    );
+    return {
+      kicker: f.mil ? '◎ Loiter · MIL' : '◎ Loiter',
+      title: f.callsign,
+      rows: [
+        { label: 'dwelling', value: `${f.verdict.dwellMin}m within ${f.verdict.radiusMi} mi` },
+        ...(f.altFt != null ? [{ label: 'altitude', value: `${f.altFt.toLocaleString()} ft · ${bandLabel(f.altFt)}` }] : []),
+      ],
+      action: { label: '⤓ fly to on globe', title: 'Point the globe here', onClick: fly },
+    };
   },
 
   legend: (d) => (

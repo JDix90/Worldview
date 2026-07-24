@@ -8,6 +8,7 @@
  * (verified 2026-07-22), block-level anonymized addresses upstream, updated
  * by Denver PD Mon–Fri.
  */
+import { DATA_FOOTPRINT_DEG } from '../city/registry';
 
 export type CrimeGroup = 'violent' | 'property' | 'other';
 
@@ -22,6 +23,17 @@ export interface CrimeIncident {
   /** Block-level address as published (already anonymized by the city). */
   address: string;
   reportedAtMs: number;
+  /** When the offense actually occurred — often days before it was reported.
+   *  null when the upstream omits it. */
+  occurredAtMs: number | null;
+  /** End of the occurrence window (spanning offenses, e.g. overnight). null
+   *  when equal to / absent from the first-occurrence time. */
+  occurredEndMs: number | null;
+  /** City neighborhood id, kebab-case (e.g. "five-points"). Locates a
+   *  block-anonymized address better than the street number alone. */
+  neighborhood: string;
+  /** Victims on the incident; surfaced only when > 1. */
+  victimCount: number | null;
 }
 
 export interface CrimeSource {
@@ -55,6 +67,10 @@ interface ArcGisGeoJson {
       OFFENSE_CATEGORY_ID?: string;
       OFFENSE_TYPE_ID?: string;
       REPORTED_DATE?: number;
+      FIRST_OCCURRENCE_DATE?: number;
+      LAST_OCCURRENCE_DATE?: number;
+      NEIGHBORHOOD_ID?: string;
+      VICTIM_COUNT?: number;
       INCIDENT_ADDRESS?: string;
     };
   }>;
@@ -66,10 +82,13 @@ const denverSource: CrimeSource = {
   attribution: 'data: Denver Open Data (DPD, updated Mon–Fri)',
   async fetchRecent(lat, lon, days) {
     const since = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
-    const bbox = `${lon - 0.15},${lat - 0.12},${lon + 0.15},${lat + 0.12}`;
+    // ArcGIS envelope xmin,ymin,xmax,ymax over the shared data footprint (#127).
+    const { lat: dLat, lon: dLon } = DATA_FOOTPRINT_DEG;
+    const bbox = `${lon - dLon},${lat - dLat},${lon + dLon},${lat + dLat}`;
     const params = new URLSearchParams({
       where: `REPORTED_DATE >= DATE '${since}' AND IS_CRIME = 1`,
-      outFields: 'OFFENSE_CATEGORY_ID,OFFENSE_TYPE_ID,REPORTED_DATE,INCIDENT_ADDRESS',
+      outFields:
+        'OFFENSE_CATEGORY_ID,OFFENSE_TYPE_ID,REPORTED_DATE,FIRST_OCCURRENCE_DATE,LAST_OCCURRENCE_DATE,NEIGHBORHOOD_ID,VICTIM_COUNT,INCIDENT_ADDRESS',
       geometry: bbox,
       geometryType: 'esriGeometryEnvelope',
       inSR: '4326',
@@ -87,6 +106,8 @@ const denverSource: CrimeSource = {
       if (!coords || !Number.isFinite(coords[0]) || !Number.isFinite(coords[1])) continue;
       if (typeof p.REPORTED_DATE !== 'number') continue;
       const category = p.OFFENSE_CATEGORY_ID ?? 'unknown';
+      const first = typeof p.FIRST_OCCURRENCE_DATE === 'number' ? p.FIRST_OCCURRENCE_DATE : null;
+      const last = typeof p.LAST_OCCURRENCE_DATE === 'number' ? p.LAST_OCCURRENCE_DATE : null;
       out.push({
         lon: coords[0],
         lat: coords[1],
@@ -95,6 +116,11 @@ const denverSource: CrimeSource = {
         type: p.OFFENSE_TYPE_ID ?? category,
         address: p.INCIDENT_ADDRESS ?? '',
         reportedAtMs: p.REPORTED_DATE,
+        occurredAtMs: first,
+        // only a genuine window (> a minute) is worth showing as a range
+        occurredEndMs: last && first && last - first > 60_000 ? last : null,
+        neighborhood: p.NEIGHBORHOOD_ID ?? '',
+        victimCount: typeof p.VICTIM_COUNT === 'number' ? p.VICTIM_COUNT : null,
       });
     }
     return out;

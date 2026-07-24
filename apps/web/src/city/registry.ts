@@ -38,21 +38,106 @@ export function toPx(view: MercatorView, lat: number, lon: number): { x: number;
   return { x: w.x * TILE - view.originX, y: w.y * TILE - view.originY };
 }
 
+/** Inverse of toPx — viewport px back to lat/lon. Lets a picked point be
+ *  stored as geography and re-projected as the map pans, instead of freezing
+ *  at the pixel it was clicked (#129). */
+export function fromPx(view: MercatorView, x: number, y: number): { lat: number; lon: number } {
+  const n = 2 ** view.z;
+  const worldX = (x + view.originX) / TILE;
+  const worldY = (y + view.originY) / TILE;
+  const lon = (worldX / n) * 360 - 180;
+  const lat = (Math.atan(Math.sinh(Math.PI * (1 - (2 * worldY) / n))) * 180) / Math.PI;
+  return { lat, lon };
+}
+
 export function onScreen(view: MercatorView, p: { x: number; y: number }, pad = 4): boolean {
   return p.x >= -pad && p.x <= view.w + pad && p.y >= -pad && p.y <= view.h + pad;
 }
 
-/** XYZ tiles covering the viewport (basemap and tile overlays share this). */
-export function tileGrid(view: MercatorView): Array<{ x: number; y: number; left: number; top: number }> {
-  const n = 2 ** view.z;
-  const out: Array<{ x: number; y: number; left: number; top: number }> = [];
-  for (let tx = Math.floor(view.originX / TILE); tx <= Math.floor((view.originX + view.w) / TILE); tx++) {
-    for (let ty = Math.floor(view.originY / TILE); ty <= Math.floor((view.originY + view.h) / TILE); ty++) {
-      if (ty < 0 || ty >= n) continue;
-      out.push({ x: ((tx % n) + n) % n, y: ty, left: tx * TILE - view.originX, top: ty * TILE - view.originY });
+export interface Tile {
+  x: number;
+  y: number;
+  left: number;
+  top: number;
+  /** On-screen size in px — TILE only when tileZ === view.z. */
+  size: number;
+}
+
+/**
+ * XYZ tiles covering the viewport, addressed at an INTEGER `tileZ` that need
+ * not equal `view.z`. Real tile servers only speak integer zoom, but the view
+ * is continuous (#127), so a tile is drawn at `TILE * 2**(view.z - tileZ)` px
+ * and the browser scales it — the standard slippy-map answer for the space
+ * between levels, and the same trick radarLayer already hand-rolled to
+ * over-zoom RainViewer's z7 ceiling (#125). Basemap and radar now share it,
+ * so the two can't drift apart.
+ *
+ * `pad` extends the grid by whole tiles beyond the viewport, which is what
+ * lets a drag translate the whole pane without exposing empty edges.
+ */
+export function scaledTileGrid(view: MercatorView, tileZ: number, pad = 0): Tile[] {
+  const n = 2 ** tileZ;
+  const size = TILE * 2 ** (view.z - tileZ); // one tile's on-screen px
+  const out: Tile[] = [];
+  const x0 = Math.floor(view.originX / size) - pad;
+  const x1 = Math.floor((view.originX + view.w) / size) + pad;
+  const y0 = Math.floor(view.originY / size) - pad;
+  const y1 = Math.floor((view.originY + view.h) / size) + pad;
+  for (let tx = x0; tx <= x1; tx++) {
+    for (let ty = y0; ty <= y1; ty++) {
+      if (ty < 0 || ty >= n) continue; // no wrap in latitude
+      out.push({
+        x: ((tx % n) + n) % n, // longitude wraps
+        y: ty,
+        left: tx * size - view.originX,
+        top: ty * size - view.originY,
+        size,
+      });
     }
   }
   return out;
+}
+
+/** XYZ tiles at the view's own (integer) zoom. */
+export function tileGrid(view: MercatorView): Tile[] {
+  return scaledTileGrid(view, view.z);
+}
+
+// ── The data footprint ────────────────────────────────────────────────────
+/**
+ * Half-extent of the box CRIME and CAMERAS are fetched into — ~±8 mi at
+ * Denver's latitude. Both fetchers (feed/crime.ts, feed/alpr.ts) import this,
+ * so the number has one home; the map uses it to pick an opening zoom that
+ * frames the data it actually has, and to draw the honest edge beyond which
+ * nothing was ever fetched.
+ */
+export const DATA_FOOTPRINT_DEG = { lat: 0.12, lon: 0.15 } as const;
+
+/**
+ * The zoom at which the data footprint just fits a w×h viewport. Opening here
+ * means a phone and a desktop show the same real-world area rather than the
+ * same pixel count — a fixed z would frame ~47 mi of mostly-empty map on a
+ * wide screen and a few blocks on a narrow one.
+ */
+export function fitZoom(home: { lat: number; lon: number }, w: number, h: number): number {
+  const span = (z: number) => {
+    const a = worldXY(home.lat - DATA_FOOTPRINT_DEG.lat, home.lon - DATA_FOOTPRINT_DEG.lon, z);
+    const b = worldXY(home.lat + DATA_FOOTPRINT_DEG.lat, home.lon + DATA_FOOTPRINT_DEG.lon, z);
+    return { w: Math.abs(b.x - a.x) * TILE, h: Math.abs(b.y - a.y) * TILE };
+  };
+  const s = span(0); // px at z0; every level doubles
+  return Math.min(Math.log2(w / s.w), Math.log2(h / s.h));
+}
+
+/** A view of w×h px centered on a lat/lon at zoom z. */
+export function viewCenteredOn(
+  center: { lat: number; lon: number },
+  z: number,
+  w: number,
+  h: number,
+): MercatorView {
+  const c = worldXY(center.lat, center.lon, z);
+  return { z, originX: c.x * TILE - w / 2, originY: c.y * TILE - h / 2, w, h };
 }
 
 // ── Layer state ───────────────────────────────────────────────────────────
@@ -64,6 +149,34 @@ export interface CityPick {
   item: unknown;
   x: number;
   y: number;
+  /** Pick point as geography, so the selection halo tracks across pan/zoom
+   *  (x/y are frozen at click-time; lat/lon re-project). */
+  lat?: number;
+  lon?: number;
+}
+
+/** One label→value line in the detail card. */
+export interface CityDetailRow {
+  label: string;
+  value: ReactNode;
+}
+
+/**
+ * Structured detail for the picked-item card (#131). Richer than the one-line
+ * `detail`: a kicker + title + labelled rows read like the globe's AircraftCard
+ * instead of a run-on ` · ` sentence. `related` lets the card page through
+ * siblings that stack on one spot (e.g. several crimes on the same block).
+ */
+export interface CityDetail {
+  /** Small caps line above the title — usually the group/category. */
+  kicker?: string;
+  title: ReactNode;
+  rows: CityDetailRow[];
+  /** Bottom action (e.g. loiter's "⤓ fly"). */
+  action?: { label: string; title?: string; onClick: () => void };
+  /** Sibling items stacked at this spot, in display order (includes the picked
+   *  one). The card shows a "n / N ‹ ›" pager and re-picks on step. */
+  related?: unknown[];
 }
 
 export interface CityLayerDef<T = unknown> {
@@ -98,8 +211,12 @@ export interface CityLayerDef<T = unknown> {
   /** Field rendering under the SVG (tile overlays like radar). */
   renderUnder?: (data: T, view: MercatorView) => ReactNode;
   /** Detail-strip line for a picked item (data provided for context, e.g.
-   *  "+N more at this block" needs the full list). */
+   *  "+N more at this block" needs the full list). Fallback when the layer has
+   *  no `detailCard`. */
   detail?: (item: unknown, data: T) => ReactNode;
+  /** Structured card for a picked item (#131) — preferred over `detail` when
+   *  present; the card framework renders it uniformly across layers. */
+  detailCard?: (item: unknown, data: T) => CityDetail;
   /** Legend fragment (counts, color key). */
   legend?: (data: T) => ReactNode;
 }

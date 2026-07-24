@@ -11,7 +11,9 @@ import { LocationChip } from './ui/LocationChip';
 import { HomeDashboard } from './ui/HomeDashboard';
 import { FlightSearch } from './ui/FlightSearch';
 import { CityMap } from './ui/CityMap';
+import { CityLayersPanel } from './ui/CityLayersPanel';
 import { Chip } from './ui/Chip';
+import { useNarrow } from './ui/uiKit';
 import { AircraftStore } from './feed/aircraftStore';
 import { useAircraftFeed } from './feed/useAircraftFeed';
 import { useCityMap } from './feed/useCityMap';
@@ -34,6 +36,7 @@ export function App() {
   const [routeHex, setRouteHex] = useState<string | null>(null);
   const [card, setCard] = useState<LayerCard | null>(null);
   const [openPanel, setOpenPanel] = useState<PanelId | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
   const panelProps = (id: PanelId) => ({
     open: openPanel === id,
     onOpenChange: (v: boolean) => setOpenPanel(v ? id : null),
@@ -42,6 +45,23 @@ export function App() {
   // CITY map (crime + cameras) — owned here so the bottom-right CITY chip and
   // the HOME dashboard's CITY section share one modal and one fetch (#124).
   const city = useCityMap();
+  // CITY is a full-viewport takeover now (#127), not an overlay: when it's up
+  // the globe pauses (hidden, no render, camera state preserved) and the whole
+  // chip cluster steps aside so the map owns the screen.
+  const cityFull = city.open && !!city.home && city.covered;
+  const openCity = useCallback(() => {
+    setOpenPanel(null); // a full-screen map over an open right-edge panel reads as a bug
+    city.setOpen(true);
+  }, [city]);
+
+  // Cluster rhythm — two groups (state toggles · surfaces) up the right edge.
+  // Widened on phones so the taller touch-sized chips (#133) don't collide;
+  // both views use the same slots, so shared chips never jump between views.
+  const narrow = useNarrow();
+  const STEP = narrow ? 38 : 30;
+  const GAP = narrow ? 12 : 8; // extra gap between the two groups
+  const tog = (i: number) => 14 + i * STEP; // toggles (SPIN/SCREEN)
+  const srf = (j: number) => 14 + 2 * STEP + GAP + j * STEP; // surfaces
   // Loiter watch samples the live stores continuously (#125) — the ring
   // buffer must predate opening the map for "why is that helicopter
   // circling?" to have an answer on arrival.
@@ -101,37 +121,61 @@ export function App() {
         setCard={handleCard}
         spinEnabled={spinEnabled}
         routeHex={routeHex}
+        paused={cityFull}
       />
-      <Hud store={store} feedStatus={status} />
-      <FlightSearch store={store} milStore={milStore} onSelect={handleSearchSelect} />
-      {selectedHex && (
-        <AircraftCard
-          store={store}
-          hex={selectedHex}
-          onClose={() => setSelectedHex(null)}
-          routeShown={routeHex === selectedHex}
-          onToggleRoute={() => setRouteHex((r) => (r === selectedHex ? null : selectedHex))}
-        />
+      {/* Globe-only overlays (HUD, search, aircraft/object cards) are hidden
+          while CITY owns the viewport — the map is a full takeover (#127). The
+          control CLUSTER below is NOT hidden: it stays put and re-contents, so
+          navigation lives in the same corner in both views (#132). */}
+      {!cityFull && (
+        <>
+          <Hud store={store} feedStatus={status} />
+          {selectedHex && (
+            <AircraftCard
+              store={store}
+              hex={selectedHex}
+              onClose={() => setSelectedHex(null)}
+              routeShown={routeHex === selectedHex}
+              onToggleRoute={() => setRouteHex((r) => (r === selectedHex ? null : selectedHex))}
+            />
+          )}
+          {card && !selectedHex && <ObjectCard card={card} onClose={() => setCard(null)} />}
+        </>
       )}
-      {card && !selectedHex && <ObjectCard card={card} onClose={() => setCard(null)} />}
-      {/* Bottom-right control cluster, grouped by kind (design review #114):
-          state toggles at the base, then a gap, then the four surfaces that
-          open panels (they carry a › chevron). FEED moved here from its old
-          orphaned top-right corner. 30px steps; 8px gap between groups. */}
-      {openPanel === null && <SpinToggle enabled={spinEnabled} onToggle={toggleSpin} bottom={14} />}
-      {openPanel === null && <ScreenToggle bottom={44} />}
-      <LayersPanel defs={layerDefs} enabled={layersEnabled} onToggle={toggleLayer} {...panelProps('layers')} bottom={82} />
-      <LocationChip {...panelProps('location')} bottom={112} />
-      <HomeDashboard {...panelProps('home')} bottom={142} city={city} />
-      {/* CITY opens a modal (not a panel), so it doesn't join openPanel; it
-          hides with the others while a panel is open, and only when home is a
-          covered city. This is the one-click path the section was buried from. */}
-      {openPanel === null && city.covered && (
-        <Chip bottom={172} label="CITY" opens title="Recent crime + mapped cameras near home" onClick={() => city.setOpen(true)} />
-      )}
-      <FeedPanel {...panelProps('feed')} bottom={202} />
-      {city.open && city.home && city.covered && (
-        <CityMap city={city} defs={cityLayerDefs} onClose={() => city.setOpen(false)} />
+      {cityFull && <CityMap city={city} defs={cityLayerDefs} onClose={() => city.setOpen(false)} />}
+
+      {/* ── the bottom-right control cluster (both views, #132) ────────────
+          Shared surfaces (LOCATION/HOME/FEED) keep their exact position across
+          views so nothing jumps. Globe-specific chips (SPIN/SCREEN, globe
+          LAYERS, CITY-enter, SEARCH) show only on the globe; CITY swaps in a
+          GLOBE-back chip *where the CITY chip was* and its own LAYERS panel —
+          same place, inverse action. Grouped by kind (design review #114). */}
+      {!cityFull ? (
+        <>
+          <FlightSearch store={store} milStore={milStore} onSelect={handleSearchSelect} open={searchOpen} onOpenChange={setSearchOpen} />
+          {openPanel === null && <SpinToggle enabled={spinEnabled} onToggle={toggleSpin} bottom={tog(0)} />}
+          {openPanel === null && <ScreenToggle bottom={tog(1)} />}
+          <LayersPanel defs={layerDefs} enabled={layersEnabled} onToggle={toggleLayer} {...panelProps('layers')} bottom={srf(0)} />
+          <LocationChip {...panelProps('location')} bottom={srf(1)} />
+          <HomeDashboard {...panelProps('home')} bottom={srf(2)} city={city} onOpenCity={openCity} />
+          {openPanel === null && city.covered && (
+            <Chip bottom={srf(3)} label="CITY" opens title="Recent crime + mapped cameras near home" onClick={openCity} />
+          )}
+          <FeedPanel {...panelProps('feed')} bottom={srf(4)} />
+          {openPanel === null && (
+            <Chip bottom={srf(5)} label="SEARCH" state="/" opens title="Find a flight by callsign or hex ( / )" onClick={() => setSearchOpen(true)} />
+          )}
+        </>
+      ) : (
+        <>
+          <CityLayersPanel defs={cityLayerDefs} city={city} {...panelProps('layers')} bottom={srf(0)} />
+          <LocationChip {...panelProps('location')} bottom={srf(1)} />
+          <HomeDashboard {...panelProps('home')} bottom={srf(2)} city={city} onOpenCity={openCity} />
+          {openPanel === null && (
+            <Chip bottom={srf(3)} label="‹ GLOBE" opens title="Back to the globe (Esc)" onClick={() => city.setOpen(false)} />
+          )}
+          <FeedPanel {...panelProps('feed')} bottom={srf(4)} />
+        </>
       )}
     </>
   );

@@ -119,17 +119,19 @@ export const alertsLayer: CityLayerDef<AlertsData> = {
     </>
   ),
 
-  detail: (item) => {
+  detailCard: (item) => {
     const a = item as NwsAlert;
-    return (
-      <span>
-        <span style={{ color: colorOf(a) }}>⚠ {a.event}</span>
-        <span style={{ opacity: 0.65 }}>
-          {a.until && ` · until ${a.until}`}
-          {a.sender && ` · ${a.sender}`}
-        </span>
-      </span>
-    );
+    return {
+      kicker: `⚠ ${a.severity || 'Alert'}`,
+      title: a.event,
+      rows: [
+        // headline is the most human field NWS sends and the old line dropped it
+        ...(a.headline ? [{ label: 'headline', value: a.headline }] : []),
+        ...(a.until ? [{ label: 'until', value: a.until }] : []),
+        ...(a.sender ? [{ label: 'source', value: a.sender }] : []),
+        ...(a.rings.length === 0 ? [{ label: 'area', value: 'zone-based (no polygon)' }] : []),
+      ],
+    };
   },
 
   legend: (d) => (

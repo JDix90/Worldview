@@ -22,6 +22,31 @@ function ago(ms: number): string {
 }
 
 const humanize = (id: string) => id.replace(/-/g, ' ');
+const titleCase = (id: string) => humanize(id).replace(/\b\w/g, (c) => c.toUpperCase());
+const GROUP_LABEL: Record<CrimeGroup, string> = { violent: 'Violent', property: 'Property', other: 'Other' };
+
+const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MO = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+// Denver Open Data stamps these as local-time-in-a-UTC-epoch (the standard
+// municipal-ArcGIS convention), so getUTC* reads the true wall-clock face.
+function clock(ms: number, withDate = true): string {
+  const d = new Date(ms);
+  let h = d.getUTCHours();
+  const ap = h < 12 ? 'AM' : 'PM';
+  h = h % 12 || 12;
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  const time = `${h}:${mm} ${ap}`;
+  return withDate ? `${WD[d.getUTCDay()]} ${MO[d.getUTCMonth()]} ${d.getUTCDate()}, ${time}` : time;
+}
+
+/** "Sat Jul 19, 9:06 PM" — or a range when the offense spans a window. */
+function occurredText(inc: CrimeIncident): string | null {
+  if (inc.occurredAtMs == null) return null;
+  const start = clock(inc.occurredAtMs);
+  if (inc.occurredEndMs == null) return start;
+  const sameDay = new Date(inc.occurredAtMs).getUTCDate() === new Date(inc.occurredEndMs).getUTCDate();
+  return `${start} – ${clock(inc.occurredEndMs, !sameDay)}`;
+}
 
 export const crimeLayer: CityLayerDef<CrimeIncident[]> = {
   id: 'crime',
@@ -78,6 +103,29 @@ export const crimeLayer: CityLayerDef<CrimeIncident[]> = {
         </span>
       </span>
     );
+  },
+
+  detailCard: (item, d) => {
+    const inc = item as CrimeIncident;
+    const occurred = occurredText(inc);
+    const block = [inc.address || 'location withheld', inc.neighborhood && titleCase(inc.neighborhood)]
+      .filter(Boolean)
+      .join(' · ');
+    // Every offense sharing this block, newest first — the card pages them.
+    const siblings = d
+      .filter((i) => i.address === inc.address)
+      .sort((a, b) => b.reportedAtMs - a.reportedAtMs);
+    return {
+      kicker: `${GROUP_LABEL[inc.group]} crime`,
+      title: titleCase(inc.type),
+      rows: [
+        ...(occurred ? [{ label: 'occurred', value: occurred }] : []),
+        { label: 'reported', value: ago(inc.reportedAtMs) },
+        { label: 'block', value: block },
+        ...(inc.victimCount && inc.victimCount > 1 ? [{ label: 'victims', value: String(inc.victimCount) }] : []),
+      ],
+      related: siblings.length > 1 ? siblings : undefined,
+    };
   },
 
   legend: (d) => {

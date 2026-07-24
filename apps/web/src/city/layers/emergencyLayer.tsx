@@ -88,18 +88,19 @@ export const emergencyLayer: CityLayerDef<EmergencyData> = {
     </>
   ),
 
-  detail: (item) => {
+  detailCard: (item) => {
     const a = item as IpawsAlert;
     const until = a.expiresMs ? new Date(a.expiresMs).toISOString().slice(11, 16) + 'Z' : null;
-    return (
-      <span>
-        <span style={{ color: MAGENTA }}>⬢ {a.event}</span>
-        <span style={{ opacity: 0.65 }}>
-          {a.areaDesc && ` · ${a.areaDesc}`}
-          {until && ` · until ${until}`}
-        </span>
-      </span>
-    );
+    return {
+      kicker: '⬢ Civil alert',
+      title: a.event,
+      rows: [
+        ...(a.headline ? [{ label: 'headline', value: a.headline }] : []),
+        ...(a.areaDesc ? [{ label: 'area', value: a.areaDesc }] : []),
+        ...(until ? [{ label: 'until', value: until }] : []),
+        { label: 'source', value: 'FEMA IPAWS' },
+      ],
+    };
   },
 
   legend: (d) => (
