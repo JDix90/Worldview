@@ -9,6 +9,9 @@ import { crimeLayer } from './crimeLayer';
 import { camerasLayer } from './camerasLayer';
 import { oemLayer } from './oemLayer';
 import { loiterLayer } from './loiterLayer';
+import { transitLayer } from './transitLayer';
+import { threeOneOneLayer } from './threeOneOneLayer';
+import { emergencyLayer } from './emergencyLayer';
 
 // Order = chip/legend order AND svg draw order (later = on top): radar is a
 // field under everything; alert polygons under the point layers; OEM on top.
@@ -16,8 +19,11 @@ import { loiterLayer } from './loiterLayer';
 export const cityLayerDefs: CityLayerDef<any>[] = [
   radarLayer,
   alertsLayer,
+  emergencyLayer,
+  threeOneOneLayer,
   crimeLayer,
   camerasLayer,
   oemLayer,
+  transitLayer,
   loiterLayer,
 ];

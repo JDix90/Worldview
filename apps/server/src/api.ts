@@ -15,6 +15,8 @@ import {
   type Daytype,
 } from '@orrery/shared';
 import { env } from './env.js';
+import { decodeVehicleFeed } from './gtfsrt.js';
+import { fetchIpaws } from './ipaws.js';
 import type { SnapshotFeed } from './snapshotFeed.js';
 import { nearestCity, distMiles, compass16 } from './data/cities.js';
 import { routeLabel } from './routes.js';
@@ -434,6 +436,45 @@ export function registerApi(
       );
       return parseFaa(entry.body as string);
     };
+
+    // ── RTD GTFS-Realtime → JSON (CITY map transit layer, #125). The .pb is
+    // keyless but protobuf + CORS-unknown; decode server-side with the
+    // hand-rolled reader (gtfsrt.ts) so the client stays dependency-free.
+    // 30s TTL matches the layer's poll-while-open cadence; stale-serves.
+    let transitCache: { at: number; body: unknown } | null = null;
+    scope.get('/api/proxy/transit', async (_req, reply) => {
+      if (transitCache && Date.now() - transitCache.at < 30_000) return transitCache.body;
+      try {
+        const res = await fetch('https://www.rtd-denver.com/files/gtfs-rt/VehiclePosition.pb', {
+          headers: { 'user-agent': 'ORRERY (personal, non-commercial)' },
+          signal: AbortSignal.timeout(10_000),
+          redirect: 'follow',
+        });
+        if (!res.ok) throw new Error(`RTD HTTP ${res.status}`);
+        const vehicles = decodeVehicleFeed(new Uint8Array(await res.arrayBuffer()));
+        transitCache = { at: Date.now(), body: { vehicles, fetchedAt: Date.now() } };
+        return transitCache.body;
+      } catch (err) {
+        if (transitCache) return transitCache.body; // stale beats nothing
+        return reply.code(502).send({ error: 'transit upstream unavailable', detail: String(err) });
+      }
+    });
+
+    // ── IPAWS non-weather emergencies (CITY map, #125): AMBER/civil/LEW/
+    // evac/hazmat only — weather is the NWS layer's job. 2min cache,
+    // stale-serve; empty array is the normal, quiet state.
+    let ipawsCache: { at: number; body: unknown } | null = null;
+    scope.get('/api/proxy/ipaws', async (_req, reply) => {
+      if (ipawsCache && Date.now() - ipawsCache.at < 2 * 60_000) return ipawsCache.body;
+      try {
+        const alerts = await fetchIpaws();
+        ipawsCache = { at: Date.now(), body: { alerts } };
+        return ipawsCache.body;
+      } catch (err) {
+        if (ipawsCache) return ipawsCache.body;
+        return reply.code(502).send({ error: 'ipaws upstream unavailable', detail: String(err) });
+      }
+    });
 
     scope.get('/api/proxy/faa-status', async () => faaStatus());
 
