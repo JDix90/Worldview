@@ -14,7 +14,7 @@ import { sublunarPoint } from '../globe/lunar';
 import { Chip } from './Chip';
 import { OverheadRadar, MoonDisc, AqiBar, CrimeHeat } from './dashViz';
 import { flockCount } from '../feed/alpr';
-import { type CityMap, CRIME_DAYS } from '../feed/useCityMap';
+import { type CityMapState, CRIME_DAYS } from '../feed/useCityMap';
 
 const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 
@@ -154,7 +154,7 @@ interface HomeDashboardProps {
   chipVisible: boolean;
   bottom: number;
   /** Shared CITY map state (owned by App, also reachable from the CITY chip). */
-  city: CityMap;
+  city: CityMapState;
 }
 
 export function HomeDashboard({ open, onOpenChange, chipVisible, bottom, city }: HomeDashboardProps) {

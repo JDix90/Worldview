@@ -10,11 +10,12 @@ import { ScreenToggle } from './ui/ScreenToggle';
 import { LocationChip } from './ui/LocationChip';
 import { HomeDashboard } from './ui/HomeDashboard';
 import { FlightSearch } from './ui/FlightSearch';
-import { CrimeMap } from './ui/CrimeMap';
+import { CityMap } from './ui/CityMap';
 import { Chip } from './ui/Chip';
 import { AircraftStore } from './feed/aircraftStore';
 import { useAircraftFeed } from './feed/useAircraftFeed';
-import { useCityMap, CRIME_DAYS } from './feed/useCityMap';
+import { useCityMap } from './feed/useCityMap';
+import { cityLayerDefs } from './city/layers';
 import { buildLayerDefs } from './layers';
 import { loadEnabled, saveEnabled, type LayerCard } from './layers/registry';
 import { loadPrefs, savePrefs } from './prefs';
@@ -124,17 +125,8 @@ export function App() {
         <Chip bottom={172} label="CITY" opens title="Recent crime + mapped cameras near home" onClick={() => city.setOpen(true)} />
       )}
       <FeedPanel {...panelProps('feed')} bottom={202} />
-      {city.open && city.home && city.source && (
-        <CrimeMap
-          incidents={city.crime}
-          cameras={city.alpr}
-          home={city.home}
-          homeLabel={city.label.replace(/^near\s+/i, '').split(',')[0] || 'home'}
-          sourceLabel={city.source.label}
-          attribution={city.source.attribution}
-          days={CRIME_DAYS}
-          onClose={() => city.setOpen(false)}
-        />
+      {city.open && city.home && city.covered && (
+        <CityMap city={city} defs={cityLayerDefs} onClose={() => city.setOpen(false)} />
       )}
     </>
   );
