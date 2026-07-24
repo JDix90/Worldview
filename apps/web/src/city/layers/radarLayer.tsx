@@ -4,7 +4,7 @@
  * the tile path and the nearness math. ~10-minute product; the newest past
  * frame only — this is "is that storm going to hit me?", not an animation.
  */
-import { TILE, type CityLayerDef, type MercatorView } from '../registry';
+import { scaledTileGrid, type CityLayerDef, type MercatorView } from '../registry';
 
 /**
  * RainViewer's 256px tiles top out at z7 — beyond that the server returns a
@@ -52,28 +52,21 @@ export const radarLayer: CityLayerDef<RadarFrame> = {
   count: () => null,
 
   renderUnder: (frame, view: MercatorView) => {
-    const zr = Math.min(view.z, RADAR_MAX_Z);
-    const k = 2 ** (view.z - zr); // over-zoom scale factor
-    const T = TILE * k; // one radar tile's size in view px
-    const n = 2 ** zr;
-    const tiles: Array<{ x: number; y: number; left: number; top: number }> = [];
-    for (let tx = Math.floor(view.originX / T); tx <= Math.floor((view.originX + view.w) / T); tx++) {
-      for (let ty = Math.floor(view.originY / T); ty <= Math.floor((view.originY + view.h) / T); ty++) {
-        if (ty < 0 || ty >= n) continue;
-        tiles.push({ x: ((tx % n) + n) % n, y: ty, left: tx * T - view.originX, top: ty * T - view.originY });
-      }
-    }
+    // Over-zoom z7 tiles up to the (continuous) city view — the same scaled-
+    // tile projection the basemap uses, so radar and streets can't drift
+    // apart (#127). Math.floor keeps the tile address integer at fractional z.
+    const zr = Math.min(Math.floor(view.z), RADAR_MAX_Z);
     return (
       <>
-        {tiles.map((t) => (
+        {scaledTileGrid(view, zr, 1).map((t) => (
           <img
             key={`${zr}/${t.x}/${t.y}`}
             src={`${frame.host}${frame.path}/256/${zr}/${t.x}/${t.y}/2/1_1.png`}
-            width={T}
-            height={T}
+            width={t.size}
+            height={t.size}
             alt=""
-            loading="lazy"
             referrerPolicy="no-referrer"
+            draggable={false}
             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
             style={{ position: 'absolute', left: t.left, top: t.top, opacity: 0.55, userSelect: 'none' }}
           />

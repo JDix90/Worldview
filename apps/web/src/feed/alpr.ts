@@ -10,6 +10,7 @@
  * Unlike the crime feed there is no registry gate: OSM is global, so this
  * works wherever home is set.
  */
+import { DATA_FOOTPRINT_DEG } from '../city/registry';
 
 export interface AlprCamera {
   lat: number;
@@ -35,8 +36,11 @@ interface OverpassNode {
 }
 
 async function fetchAlpr(lat: number, lon: number): Promise<AlprCamera[]> {
-  // Same footprint as the crime bbox (~±8 mi at Denver's latitude).
-  const bbox = `${lat - 0.12},${lon - 0.15},${lat + 0.12},${lon + 0.15}`;
+  // Same footprint as the crime bbox (~±8 mi at Denver's latitude), shared
+  // from the registry so the map's "±8 mi of home" edge matches it (#127).
+  // Overpass bbox is south,west,north,east.
+  const { lat: dLat, lon: dLon } = DATA_FOOTPRINT_DEG;
+  const bbox = `${lat - dLat},${lon - dLon},${lat + dLat},${lon + dLon}`;
   const query = `[out:json][timeout:20];
 node["man_made"="surveillance"]["surveillance:type"="ALPR"](${bbox});
 out body;`;

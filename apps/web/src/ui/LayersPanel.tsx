@@ -4,6 +4,7 @@
  */
 import type { LayerDef } from '../layers/registry';
 import { Chip } from './Chip';
+import { pressable } from './uiKit';
 
 const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 
@@ -53,17 +54,19 @@ export function LayersPanel({ defs, enabled, onToggle, open, onOpenChange, chipV
   return (
     <div style={panel}>
       <div style={{ display: 'flex', marginBottom: 6 }}>
-        <span style={{ color: '#4fd8ff', letterSpacing: 1 }}>LAYERS</span>
+        <span style={{ color: '#4fd8ff', letterSpacing: 1 }}>GLOBE LAYERS</span>
         <span style={{ flex: 1 }} />
-        <span onClick={() => onOpenChange(false)} style={{ cursor: 'pointer', opacity: 0.6 }}>✕</span>
+        <span className="orx-x" {...pressable(() => onOpenChange(false))} aria-label="Close" style={{ cursor: 'pointer', opacity: 0.6 }}>✕</span>
       </div>
       {defs.map((d) => {
         const on = enabled.has(d.id);
         return (
           <div
             key={d.id}
-            onClick={() => onToggle(d.id)}
-            style={{ cursor: 'pointer', display: 'flex', gap: 8, opacity: on ? 1 : 0.45 }}
+            className="orx-row"
+            {...pressable(() => onToggle(d.id))}
+            aria-pressed={on}
+            style={{ cursor: 'pointer', display: 'flex', gap: 8, opacity: on ? 1 : 0.45, padding: '1px 4px', margin: '0 -4px', borderRadius: 3 }}
           >
             <span style={{ color: on ? '#4fd8ff' : 'rgba(143,163,184,0.6)' }}>{on ? '◉' : '○'}</span>
             <span>{d.label}</span>

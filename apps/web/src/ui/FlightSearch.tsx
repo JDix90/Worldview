@@ -28,6 +28,11 @@ interface Props {
   milStore: AircraftStore;
   /** Select an aircraft in the app (opens the card). Civil hexes only. */
   onSelect: (hex: string) => void;
+  /** Controlled open state — App owns it so the SEARCH chip (a touch path in,
+   *  the `/` key is not discoverable and touch-only users had none) and the
+   *  `/` shortcut share one surface (#132). */
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
 }
 
 function searchStores(store: AircraftStore, milStore: AircraftStore, q: string): Hit[] {
@@ -61,11 +66,11 @@ function searchStores(store: AircraftStore, milStore: AircraftStore, q: string):
   return out.slice(0, 5);
 }
 
-export function FlightSearch({ store, milStore, onSelect }: Props) {
-  const [open, setOpen] = useState(false);
+export function FlightSearch({ store, milStore, onSelect, open, onOpenChange }: Props) {
   const [q, setQ] = useState('');
   const [idx, setIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const setOpen = onOpenChange;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -73,17 +78,19 @@ export function FlightSearch({ store, milStore, onSelect }: Props) {
       const typing = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement;
       if (e.key === '/' && !open && !typing) {
         e.preventDefault();
-        setQ('');
-        setIdx(0);
         setOpen(true);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open]);
+  }, [open, setOpen]);
 
+  // Fresh query + focus each time it opens (chip or `/`).
   useEffect(() => {
-    if (open) inputRef.current?.focus();
+    if (!open) return;
+    setQ('');
+    setIdx(0);
+    inputRef.current?.focus();
   }, [open]);
 
   const hits = useMemo(() => (open ? searchStores(store, milStore, q) : []), [open, q, store, milStore]);

@@ -113,19 +113,18 @@ export const threeOneOneLayer: CityLayerDef<Data311> = {
     </>
   ),
 
-  detail: (item) => {
+  detailCard: (item) => {
     const r = item as ThreeOneOne;
-    return (
-      <span>
-        <span style={{ color: GREEN }}>{r.summary}</span>
-        <span style={{ opacity: 0.65 }}>
-          {r.address && ` · ${r.address}`}
-          {r.status && ` · ${r.status}`}
-          {r.agency && ` · ${r.agency}`}
-          {r.createdMs && ` · ${ago(r.createdMs)}`}
-        </span>
-      </span>
-    );
+    return {
+      kicker: '● 311 request',
+      title: r.summary,
+      rows: [
+        ...(r.address ? [{ label: 'location', value: r.address }] : []),
+        ...(r.status ? [{ label: 'status', value: r.status }] : []),
+        ...(r.agency ? [{ label: 'agency', value: r.agency }] : []),
+        ...(r.createdMs ? [{ label: 'opened', value: ago(r.createdMs) }] : []),
+      ],
+    };
   },
 
   legend: (d) => (

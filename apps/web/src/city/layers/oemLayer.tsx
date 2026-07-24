@@ -103,18 +103,19 @@ export const oemLayer: CityLayerDef<OemIncident[]> = {
     </>
   ),
 
-  detail: (item) => {
+  detailCard: (item) => {
     const inc = item as OemIncident;
-    return (
-      <span>
-        <span style={{ color: ORANGE }}>◆ {inc.name}</span>
-        <span style={{ opacity: 0.65 }}>
-          {inc.category && ` · ${inc.category}`}
-          {inc.severity && ` · ${inc.severity}`}
-          {inc.reportedMs && ` · reported ${ago(inc.reportedMs)}`}
-        </span>
-      </span>
-    );
+    return {
+      kicker: '◆ Active incident',
+      title: inc.name,
+      rows: [
+        ...(inc.category ? [{ label: 'category', value: inc.category }] : []),
+        ...(inc.type ? [{ label: 'type', value: inc.type }] : []),
+        ...(inc.severity ? [{ label: 'severity', value: inc.severity }] : []),
+        ...(inc.reportedMs ? [{ label: 'reported', value: ago(inc.reportedMs) }] : []),
+        { label: 'source', value: 'Denver OEM' },
+      ],
+    };
   },
 
   legend: (d) => (

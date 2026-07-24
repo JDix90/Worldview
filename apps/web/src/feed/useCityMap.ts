@@ -14,7 +14,7 @@ import { apiGet } from './api';
 import { sourceForHome, type CrimeIncident, type CrimeSource } from './crime';
 import type { AlprCamera } from './alpr';
 import { cityLayerDefs } from '../city/layers';
-import type { LayerData } from '../city/registry';
+import { loadEnabledCity, saveEnabledCity, type LayerData } from '../city/registry';
 
 export { CRIME_DAYS } from '../city/layers/crimeLayer';
 
@@ -31,6 +31,11 @@ export interface CityMapState {
   data: Record<string, LayerData<unknown>>;
   /** Push-style layers (e.g. loiter) write their state here. */
   setLayerData: (id: string, d: LayerData<unknown>) => void;
+  /** Layer enabled-state — owned here now (#132) so the bottom-right LAYERS
+   *  panel and the map's own chips share one source of truth, mirroring the
+   *  globe's layer panel. */
+  enabled: Record<string, boolean>;
+  toggle: (id: string) => void;
   // Typed conveniences for the dashboard section:
   crime: LayerData<CrimeIncident[]>;
   alpr: LayerData<AlprCamera[]>;
@@ -41,7 +46,15 @@ export function useCityMap(): CityMapState {
   const [label, setLabel] = useState('');
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<Record<string, LayerData<unknown>>>({});
+  const [enabled, setEnabled] = useState<Record<string, boolean>>(() => loadEnabledCity(cityLayerDefs));
   const timers = useRef<number[]>([]);
+
+  const toggle = (id: string) =>
+    setEnabled((prev) => {
+      const next = { ...prev, [id]: !prev[id] };
+      saveEnabledCity(next);
+      return next;
+    });
 
   // Home, refreshed on an interval so a LOCATION change re-homes the map too.
   useEffect(() => {
@@ -115,6 +128,8 @@ export function useCityMap(): CityMapState {
     setOpen,
     data,
     setLayerData,
+    enabled,
+    toggle,
     crime: (data['crime'] ?? null) as LayerData<CrimeIncident[]>,
     alpr: (data['cameras'] ?? null) as LayerData<AlprCamera[]>,
   };

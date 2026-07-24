@@ -69,19 +69,18 @@ export const camerasLayer: CityLayerDef<AlprCamera[]> = {
     </>
   ),
 
-  detail: (item) => {
+  detailCard: (item) => {
     const cam = item as AlprCamera;
-    return (
-      <span>
-        <span style={{ color: CAM_COLOR }}>ALPR camera</span>
-        <span style={{ opacity: 0.65 }}>
-          {cam.brand && ` · ${cam.brand}`}
-          {cam.operator && ` · operated by ${cam.operator}${cam.operatorType ? ` (${cam.operatorType})` : ''}`}
-          {cam.directionDeg !== null && ` · faces ${compass16(cam.directionDeg)}`}
-          {cam.zone && ` · ${cam.zone}`}
-        </span>
-      </span>
-    );
+    return {
+      kicker: 'ALPR camera',
+      title: cam.brand || 'License-plate reader',
+      rows: [
+        ...(cam.operator ? [{ label: 'operator', value: `${cam.operator}${cam.operatorType ? ` (${cam.operatorType})` : ''}` }] : []),
+        ...(cam.directionDeg !== null ? [{ label: 'faces', value: `${compass16(cam.directionDeg)} (${Math.round(cam.directionDeg)}°)` }] : []),
+        ...(cam.zone ? [{ label: 'zone', value: cam.zone }] : []),
+        { label: 'source', value: 'OSM community-mapped · incomplete' },
+      ],
+    };
   },
 
   legend: (d) => (

@@ -50,6 +50,10 @@ interface GlobeViewProps {
   spinEnabled: boolean;
   /** Hex of the aircraft whose flight path is shown, or null. */
   routeHex: string | null;
+  /** CITY has the viewport (#127): hide the globe, stop its render loop and the
+   *  layer tick. Stays mounted, so camera state + textures survive for an
+   *  instant return. No feel/tuning constant is touched (FOUNDATION §10). */
+  paused?: boolean;
 }
 
 export function GlobeView({
@@ -61,6 +65,7 @@ export function GlobeView({
   setCard,
   spinEnabled,
   routeHex,
+  paused = false,
 }: GlobeViewProps) {
   const globeRef = useRef<GlobeMethods | undefined>(undefined);
   const [material, setMaterial] = useState<THREE.ShaderMaterial | null>(null);
@@ -195,9 +200,24 @@ export function GlobeView({
     };
   }, []);
 
-  // ── shared tick for all layer instances ──────────────────────────────
+  // Pause when CITY takes the viewport (#127): globe.gl's own rAF stops
+  // (pauseAnimation), so no WebGL frames render while it's hidden. Camera and
+  // controls state are untouched, so resume is seamless. Tuning is not read or
+  // written here — this only starts/stops the loop.
   useEffect(() => {
     if (!ready) return;
+    const globe = globeRef.current;
+    if (!globe) return;
+    if (paused) globe.pauseAnimation();
+    else globe.resumeAnimation();
+    return () => {
+      globeRef.current?.resumeAnimation();
+    };
+  }, [ready, paused]);
+
+  // ── shared tick for all layer instances ──────────────────────────────
+  useEffect(() => {
+    if (!ready || paused) return; // no layer updates while the globe is hidden
     const camera = globeRef.current!.camera() as THREE.PerspectiveCamera;
     let raf = 0;
     const loop = () => {
@@ -208,7 +228,7 @@ export function GlobeView({
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [ready]);
+  }, [ready, paused]);
 
   // ── centralized picking ───────────────────────────────────────────────
   useEffect(() => {
@@ -264,7 +284,7 @@ export function GlobeView({
   if (!material) return null;
 
   return (
-    <>
+    <div style={paused ? { visibility: 'hidden' } : undefined}>
       <Globe
         ref={globeRef}
         width={size.w}
@@ -293,6 +313,6 @@ export function GlobeView({
       {ready && globeRef.current && routeHex && (
         <RouteLayer globe={globeRef.current} store={store} hex={routeHex} />
       )}
-    </>
+    </div>
   );
 }

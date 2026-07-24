@@ -14,6 +14,7 @@ const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 
 const popover: React.CSSProperties = {
   position: 'fixed',
+  zIndex: 60, // above the CITY map portal (#132)
   right: 144, // grows leftward — clears the 124px-wide chip + edge gap
   width: 240,
   padding: '8px 10px',

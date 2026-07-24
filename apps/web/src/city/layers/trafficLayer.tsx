@@ -127,18 +127,18 @@ export const trafficLayer: CityLayerDef<TrafficData> = {
     </>
   ),
 
-  detail: (item) => {
+  detailCard: (item) => {
     const inc = item as TrafficIncident;
-    return (
-      <span>
-        <span style={{ color: inc.closed ? RED : AMBER }}>▲ {inc.type}{inc.closed ? ' · CLOSURE' : ''}</span>
-        <span style={{ opacity: 0.65 }}>
-          {inc.route && ` · ${inc.route}`}
-          {inc.message && ` · ${inc.message.slice(0, 80)}`}
-          {inc.updatedMs && ` · ${ago(inc.updatedMs)}`}
-        </span>
-      </span>
-    );
+    return {
+      kicker: inc.closed ? '▲ Lane closure' : '▲ Traffic',
+      title: inc.type,
+      rows: [
+        ...(inc.route ? [{ label: 'route', value: inc.route }] : []),
+        ...(inc.message ? [{ label: 'detail', value: inc.message }] : []),
+        ...(inc.updatedMs ? [{ label: 'updated', value: ago(inc.updatedMs) }] : []),
+        { label: 'source', value: 'CDOT / COtrip' },
+      ],
+    };
   },
 
   legend: (d) => {

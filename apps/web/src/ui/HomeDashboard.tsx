@@ -20,6 +20,7 @@ const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 
 const panelStyle: React.CSSProperties = {
   position: 'fixed',
+  zIndex: 60, // above the CITY map portal (#132)
   bottom: 14,
   right: 12,
   width: 330,
@@ -155,9 +156,11 @@ interface HomeDashboardProps {
   bottom: number;
   /** Shared CITY map state (owned by App, also reachable from the CITY chip). */
   city: CityMapState;
+  /** Open the full CITY view (also closes this panel — App owns that). */
+  onOpenCity: () => void;
 }
 
-export function HomeDashboard({ open, onOpenChange, chipVisible, bottom, city }: HomeDashboardProps) {
+export function HomeDashboard({ open, onOpenChange, chipVisible, bottom, city, onOpenCity }: HomeDashboardProps) {
   const [sum, setSum] = useState<Summary | null>(null);
   const [label, setLabel] = useState<string>('');
   const [wx, setWx] = useState<Weather | null>(null);
@@ -475,7 +478,7 @@ export function HomeDashboard({ open, onOpenChange, chipVisible, bottom, city }:
               <div style={{ opacity: 0.5 }}>loading…</div>
             ) : (
               <div
-                onClick={() => city.setOpen(true)}
+                onClick={onOpenCity}
                 title="Open the full city map — recent crime and mapped cameras"
                 style={{
                   cursor: 'pointer',
