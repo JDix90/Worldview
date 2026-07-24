@@ -42,6 +42,19 @@ export function onScreen(view: MercatorView, p: { x: number; y: number }, pad = 
   return p.x >= -pad && p.x <= view.w + pad && p.y >= -pad && p.y <= view.h + pad;
 }
 
+/** XYZ tiles covering the viewport (basemap and tile overlays share this). */
+export function tileGrid(view: MercatorView): Array<{ x: number; y: number; left: number; top: number }> {
+  const n = 2 ** view.z;
+  const out: Array<{ x: number; y: number; left: number; top: number }> = [];
+  for (let tx = Math.floor(view.originX / TILE); tx <= Math.floor((view.originX + view.w) / TILE); tx++) {
+    for (let ty = Math.floor(view.originY / TILE); ty <= Math.floor((view.originY + view.h) / TILE); ty++) {
+      if (ty < 0 || ty >= n) continue;
+      out.push({ x: ((tx % n) + n) % n, y: ty, left: tx * TILE - view.originX, top: ty * TILE - view.originY });
+    }
+  }
+  return out;
+}
+
 // ── Layer state ───────────────────────────────────────────────────────────
 /** null = loading · 'unavailable' = upstream failed · T = data. */
 export type LayerData<T> = T | 'unavailable' | null;

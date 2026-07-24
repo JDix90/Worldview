@@ -16,6 +16,7 @@ import { createPortal } from 'react-dom';
 import {
   TILE,
   worldXY,
+  tileGrid,
   loadEnabledCity,
   saveEnabledCity,
   type CityLayerDef,
@@ -77,19 +78,12 @@ export function CityMap({ city, defs, onClose }: Props) {
     h: MAP_H,
   };
 
-  // Basemap tile grid.
-  const tiles = useMemo(() => {
-    const n = 2 ** z;
-    const out: Array<{ x: number; y: number; left: number; top: number }> = [];
-    for (let tx = Math.floor(view.originX / TILE); tx <= Math.floor((view.originX + MAP_W) / TILE); tx++) {
-      for (let ty = Math.floor(view.originY / TILE); ty <= Math.floor((view.originY + MAP_H) / TILE); ty++) {
-        if (ty < 0 || ty >= n) continue;
-        out.push({ x: ((tx % n) + n) % n, y: ty, left: tx * TILE - view.originX, top: ty * TILE - view.originY });
-      }
-    }
-    return out;
+  // Basemap tile grid (same helper the radar overlay uses).
+  const tiles = useMemo(
+    () => tileGrid(view),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [z, view.originX, view.originY]);
+    [z, view.originX, view.originY],
+  );
 
   // Layer states, resolved once per render.
   const states = defs.map((def) => {
