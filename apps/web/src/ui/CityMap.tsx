@@ -49,7 +49,18 @@ export function CityMap({ city, defs, onClose }: Props) {
   const [picked, setPicked] = useState<CityPick | null>(null);
   const [drawer, setDrawer] = useState(false);
   const [enabled, setEnabled] = useState<Record<string, boolean>>(() => loadEnabledCity(defs));
+  // Two-phase paint: the first commit renders only the chrome + basemap (cheap)
+  // so the modal appears the instant you click; the ~900-1500 layer SVG nodes
+  // mount on the next frame. Without this, the first render blocked the main
+  // thread ~1s and the click looked ignored (#126). `painted` also re-arms on
+  // a zoom change, since re-projecting every layer is the same heavy commit.
+  const [painted, setPainted] = useState(false);
   const z = PRESETS.find((p) => p.id === preset)!.z;
+  useEffect(() => {
+    setPainted(false);
+    const id = requestAnimationFrame(() => requestAnimationFrame(() => setPainted(true)));
+    return () => cancelAnimationFrame(id);
+  }, [z]);
   const home = city.home!;
   const homeLabel = city.label.replace(/^near\s+/i, '').split(',')[0] || 'home';
 
@@ -225,17 +236,18 @@ export function CityMap({ city, defs, onClose }: Props) {
             />
           ))}
           <div style={{ position: 'absolute', inset: 0, background: 'rgba(6,10,16,0.12)', pointerEvents: 'none' }} />
-          {/* field layers (radar) under the vector SVG */}
-          {states.map((s) =>
-            s.rendering && s.def.renderUnder && s.data !== null && s.data !== 'unavailable' ? (
-              <div key={`u-${s.def.id}`} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-                {s.def.renderUnder(s.data as never, view)}
-              </div>
-            ) : null,
-          )}
-          {bothLoading && (
+          {/* field layers (radar) under the vector SVG — deferred with the rest */}
+          {painted &&
+            states.map((s) =>
+              s.rendering && s.def.renderUnder && s.data !== null && s.data !== 'unavailable' ? (
+                <div key={`u-${s.def.id}`} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+                  {s.def.renderUnder(s.data as never, view)}
+                </div>
+              ) : null,
+            )}
+          {(!painted || bothLoading) && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(200,214,229,0.7)', pointerEvents: 'none' }}>
-              loading city data…
+              {bothLoading ? 'loading city data…' : 'drawing…'}
             </div>
           )}
           <svg
@@ -245,11 +257,12 @@ export function CityMap({ city, defs, onClose }: Props) {
             style={{ position: 'absolute', inset: 0, cursor: 'crosshair' }}
             onClick={pick}
           >
-            {states.map((s) =>
-              s.rendering && s.def.renderSvg && s.data !== null && s.data !== 'unavailable' ? (
-                <g key={s.def.id}>{s.def.renderSvg(s.data as never, view, picked)}</g>
-              ) : null,
-            )}
+            {painted &&
+              states.map((s) =>
+                s.rendering && s.def.renderSvg && s.data !== null && s.data !== 'unavailable' ? (
+                  <g key={s.def.id}>{s.def.renderSvg(s.data as never, view, picked)}</g>
+                ) : null,
+              )}
             {/* home marker — amber ringed dot, matching the overhead radar */}
             <circle cx={MAP_W / 2} cy={MAP_H / 2} r={5} fill="none" stroke="#ffd27f" strokeWidth={1.4} />
             <circle cx={MAP_W / 2} cy={MAP_H / 2} r={1.8} fill="#ffd27f" />

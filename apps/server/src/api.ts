@@ -476,6 +476,27 @@ export function registerApi(
       }
     });
 
+    // ── COtrip (CDOT) traffic incidents (CITY map L8, #126). Key stays
+    // server-side; statewide GeoJSON, the client filters to the home bbox.
+    // 2min cache, stale-serve; empty when the roads are clear.
+    let trafficCache: { at: number; body: unknown } | null = null;
+    scope.get('/api/proxy/traffic', async (_req, reply) => {
+      if (!env.cotripApiKey) return { type: 'FeatureCollection', features: [], disabled: true };
+      if (trafficCache && Date.now() - trafficCache.at < 2 * 60_000) return trafficCache.body;
+      try {
+        const res = await fetch(
+          `https://data.cotrip.org/api/v1/incidents?apiKey=${encodeURIComponent(env.cotripApiKey)}`,
+          { headers: { 'user-agent': 'ORRERY (personal, non-commercial)' }, signal: AbortSignal.timeout(10_000) },
+        );
+        if (!res.ok) throw new Error(`COtrip HTTP ${res.status}`);
+        trafficCache = { at: Date.now(), body: await res.json() };
+        return trafficCache.body;
+      } catch (err) {
+        if (trafficCache) return trafficCache.body;
+        return reply.code(502).send({ error: 'traffic upstream unavailable', detail: String(err) });
+      }
+    });
+
     scope.get('/api/proxy/faa-status', async () => faaStatus());
 
     scope.get('/api/proxy/storms', async (_req, reply) => {

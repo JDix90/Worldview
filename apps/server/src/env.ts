@@ -31,4 +31,7 @@ export const env = {
   ownerAirport: (process.env.OWNER_AIRPORT ?? 'DEN').toUpperCase(),
   ownerLat: Number(process.env.OWNER_LAT ?? 39.74),
   ownerLon: Number(process.env.OWNER_LON ?? -104.99),
+  // COtrip (CDOT) traffic incidents — CITY map L8 (#126). Keyed-free upstream;
+  // the key stays server-side (FIRMS precedent #100). Empty = layer degrades.
+  cotripApiKey: process.env.COTRIP_API_KEY ?? '',
 };
