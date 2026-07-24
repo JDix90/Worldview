@@ -16,6 +16,7 @@ import { AircraftStore } from './feed/aircraftStore';
 import { useAircraftFeed } from './feed/useAircraftFeed';
 import { useCityMap } from './feed/useCityMap';
 import { cityLayerDefs } from './city/layers';
+import { useLoiterWatch } from './city/useLoiterWatch';
 import { buildLayerDefs } from './layers';
 import { loadEnabled, saveEnabled, type LayerCard } from './layers/registry';
 import { loadPrefs, savePrefs } from './prefs';
@@ -41,6 +42,10 @@ export function App() {
   // CITY map (crime + cameras) — owned here so the bottom-right CITY chip and
   // the HOME dashboard's CITY section share one modal and one fetch (#124).
   const city = useCityMap();
+  // Loiter watch samples the live stores continuously (#125) — the ring
+  // buffer must predate opening the map for "why is that helicopter
+  // circling?" to have an answer on arrival.
+  useLoiterWatch(store, milStore, city.covered ? city.home : null, city.setLayerData);
   const [spinEnabled, setSpinEnabled] = useState(() => loadPrefs().spinEnabled);
   const toggleSpin = useCallback(() => {
     setSpinEnabled((prev) => {
