@@ -530,6 +530,48 @@ def fetch_emergency(url: str, token: str, lat: float, lon: float) -> list:
         return []
 
 
+_TRAFFIC_NEAR = (0.35, 0.4)  # (dlat, dlon) ~25 mi bbox — matches the browser TRAFFIC layer (#126)
+
+
+def fetch_traffic(url: str, token: str, lat: float, lon: float) -> list:
+    """Near-home CDOT/COtrip road CLOSURES via the server proxy (#126 — the key
+    stays server-side; the Pi never sees it). Only closures, not every incident:
+    a closure on the way out is local + changing + actionable — the phase-2
+    insert (#137). Returns [{route, message, dist_mi}] nearest-first, or []. No
+    'saved route' concept yet, so v1 filters to ~25 mi of home."""
+    import math, re
+    try:
+        r = requests.get(f"{url}/api/proxy/traffic",
+                         headers={"Authorization": f"Bearer {token}"}, timeout=10)
+        r.raise_for_status()
+        coslat = math.cos(math.radians(lat))
+        out = []
+        for f in r.json().get("features", []):
+            g = f.get("geometry") or {}
+            co, gt = g.get("coordinates"), g.get("type")
+            if gt == "Point" and isinstance(co, list) and len(co) >= 2 and isinstance(co[0], (int, float)):
+                lon0, lat0 = co[0], co[1]
+            elif gt == "MultiPoint" and isinstance(co, list) and co and isinstance(co[0], list):
+                lon0, lat0 = co[0][0], co[0][1]
+            else:
+                continue
+            if abs(lat0 - lat) > _TRAFFIC_NEAR[0] or abs(lon0 - lon) > _TRAFFIC_NEAR[1]:
+                continue
+            p = f.get("properties") or {}
+            hay = " ".join(str(p.get(k, "")) for k in
+                           ("status", "severity", "category", "laneImpacts", "travelerInformationMessage")).lower()
+            if not re.search(r"closed|closure|blocked|all lanes", hay):
+                continue
+            out.append({"route": p.get("routeName") or p.get("type") or "road",
+                        "message": p.get("travelerInformationMessage"),
+                        "dist_mi": round(math.hypot((lon0 - lon) * 69.0 * coslat, (lat0 - lat) * 69.0))})
+        out.sort(key=lambda x: x["dist_mi"])
+        return out
+    except Exception as e:
+        print(f"[display] traffic fetch failed: {e}", file=sys.stderr)
+        return []
+
+
 # ─────────────────────────── text helpers ───────────────────────────
 def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_w: int) -> list[str]:
     words, lines, cur = text.split(), [], ""
@@ -544,6 +586,17 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_w: int) -> list[str]:
     if cur:
         lines.append(cur)
     return lines
+
+
+def _ellipsize(draw: ImageDraw.ImageDraw, text: str, font, max_w: int) -> str:
+    """Trim text to fit max_w px with a trailing '…' (#137). Replaces the
+    char-count `[:N]` cuts that ran off the panel edge with no sign they'd been
+    clipped — a truncated line must LOOK truncated."""
+    if draw.textlength(text, font=font) <= max_w:
+        return text
+    while text and draw.textlength(text + "…", font=font) > max_w:
+        text = text[:-1]
+    return text.rstrip() + "…" if text else "…"
 
 
 def _demark(text: str) -> str:
@@ -579,7 +632,7 @@ PAGES = ["NOW", "BRIEFING", "OVERHEAD", "SKY", "SYSTEM"]
 # (rare, so they can afford a longer read when they do appear).
 DWELL_SEC = {
     "NOW": 10, "BRIEFING": 14, "OVERHEAD": 12, "SKY": 8, "SYSTEM": 6,
-    "HAZARDS": 10, "NEARBY SIGNALS": 12, "RADAR": 8, "CRIME": 10,
+    "HAZARDS": 10, "NEARBY SIGNALS": 12, "RADAR": 8, "TRAFFIC": 9, "CRIME": 10,
 }
 
 # Ticker: one item at a time, swapped every TICKER_SEC. Deliberately not a
@@ -716,6 +769,8 @@ def compute_rotation(s: dict, c: dict, sysinfo: dict, hour_local: int) -> tuple:
         insert("NEARBY SIGNALS")
     if (c.get("radar") or {}).get("near"):
         insert("RADAR")
+    if c.get("closures"):               # a near road closure (#137) — Tier-2, no promote
+        insert("TRAFFIC")
     if _violent_near(s, c):
         insert("CRIME")
 
@@ -781,13 +836,14 @@ def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
     c = conditions or {}
     # pages driven by the conditions bundle (weather/aqi/sky/crime). CRIME,
     # HAZARDS and RADAR are exception inserts now (#135) but render the same way.
-    if page in ("NOW", "CRIME", "HAZARDS", "SKY", "RADAR"):
+    if page in ("NOW", "CRIME", "HAZARDS", "SKY", "RADAR", "TRAFFIC"):
         {
             "NOW": _page_now,
             "CRIME": _page_crime,
             "HAZARDS": _page_hazards,
             "SKY": _page_sky,
             "RADAR": _page_radar,
+            "TRAFFIC": _page_traffic,
         }[page](d, s, c, L)
     else:
         {
@@ -840,7 +896,7 @@ def _page_now(d, s: dict, c: dict, L: Layout) -> None:
     haz = _hazards(s, c)
     if haz:
         for text, is_red in haz[:3]:
-            d.text((L.pad, y), text[:52], font=L.md, fill=RED if is_red else AMBER)
+            d.text((L.pad, y), _ellipsize(d, text, L.md, L.w - 2 * L.pad), font=L.md, fill=RED if is_red else AMBER)
             y += L.line_md + 4
             if y > L.h - L.footer_h - L.line_md:
                 break
@@ -862,7 +918,7 @@ def _page_hazards(d, s: dict, c: dict, L: Layout) -> None:
         # event name big in the band, its "until …" tail on a line below, so a
         # long headline doesn't run off the panel edge.
         event, _sep, rest = reds[0].partition(" · ")
-        d.text((L.pad, y + 2), event[:34], font=L.lg, fill=(255, 210, 210))
+        d.text((L.pad, y + 2), _ellipsize(d, event, L.lg, L.w - 2 * L.pad), font=L.lg, fill=(255, 210, 210))
         y = L.header_h + band_h + L.pad
         if rest:
             d.text((L.pad, y), rest, font=L.md, fill=RED)
@@ -870,7 +926,7 @@ def _page_hazards(d, s: dict, c: dict, L: Layout) -> None:
         for text, is_red in haz:
             if text == reds[0]:
                 continue
-            d.text((L.pad, y), text[:52], font=L.md, fill=RED if is_red else AMBER)
+            d.text((L.pad, y), _ellipsize(d, text, L.md, L.w - 2 * L.pad), font=L.md, fill=RED if is_red else AMBER)
             y += L.line_md + 4
             if y > L.h - L.footer_h - L.line_md:
                 break
@@ -878,7 +934,7 @@ def _page_hazards(d, s: dict, c: dict, L: Layout) -> None:
         d.text((L.pad, y), "HAZARDS", font=L.sm, fill=CYAN)
         y += L.line_sm + 8
         for text, is_red in haz:
-            d.text((L.pad, y), text[:52], font=L.md, fill=AMBER)
+            d.text((L.pad, y), _ellipsize(d, text, L.md, L.w - 2 * L.pad), font=L.md, fill=AMBER)
             y += L.line_md + 4
     else:
         d.text((L.pad, y), "nothing active near you", font=L.md, fill=GREEN)
@@ -992,10 +1048,13 @@ def _sig_kind(what: str) -> str:
 
 
 def _page_signals(d, s, _sys, _summ, L: Layout) -> None:
-    sigs = s.get("signals", [])
+    sigs = list(s.get("signals", []))
     if not sigs:
         d.text((L.pad, L.h // 2 - 8), "nothing of note", font=L.md, fill=DIM)
         return
+    # nearest-first, so a page titled NEARBY SIGNALS actually leads with what's
+    # near you — not El Paso then Auckland (#137). Unknown/global distance last.
+    sigs.sort(key=lambda x: x["distMi"] if isinstance(x.get("distMi"), (int, float)) else 1e9)
     y = L.header_h + L.pad
     max_w = L.w - 2 * L.pad
     n = 3 if L.landscape else 2
@@ -1006,19 +1065,23 @@ def _page_signals(d, s, _sys, _summ, L: Layout) -> None:
         # line 1: severity + identity (route beats callsign beats place beats cell)
         ident = (ac.get("callsign") or "").strip()
         route = sig.get("route")
+        used_place = False
         if ident and route:
             headline = f"{ident}  {route}"
         elif ident:
             headline = ident
         else:
             headline = sig.get("place") or sig.get("region") or "—"
+            used_place = bool(sig.get("place"))
         d.text((L.pad, y), sev, font=L.md, fill=col)
-        d.text((L.pad + 34, y), headline[:44], font=L.md, fill=WHITE)
-        # activity tag, right-aligned: ACTIVE (amber) while still squawking, else CLEARED
+        tagw = 0
         if ac:
             tag = "ACTIVE" if ac.get("stillSquawking") else "CLEARED"
-            tw = d.textlength(tag, font=L.sm)
-            d.text((L.w - L.pad - tw, y + 2), tag, font=L.sm,
+            tagw = d.textlength(tag, font=L.sm) + 8
+        d.text((L.pad + 34, y), _ellipsize(d, headline, L.md, max_w - 34 - tagw), font=L.md, fill=WHITE)
+        # activity tag, right-aligned: ACTIVE (amber) while still squawking, else CLEARED
+        if ac:
+            d.text((L.w - L.pad - (tagw - 8), y + 2), tag, font=L.sm,
                    fill=AMBER if ac.get("stillSquawking") else DIM)
         # line 2: kind · where relative to you · age
         yy = y + L.line_md
@@ -1026,22 +1089,29 @@ def _page_signals(d, s, _sys, _summ, L: Layout) -> None:
         dist = sig.get("distMi")
         if dist is not None and dist < 1500:
             parts.append(f"{dist}mi {sig.get('bearing') or ''} of you".strip())
-        elif sig.get("place"):
+        elif sig.get("place") and not used_place:  # don't print the place twice (#137)
             parts.append(sig.get("place"))
         parts.append(_ago(sig.get("ageS", 0)))
         if ac.get("altFt"):
             parts.append(f"{ac['altFt']:,} ft")
-        d.text((L.pad, yy), " · ".join(str(p) for p in parts)[:70], font=L.sm, fill=DIM)
+        d.text((L.pad, yy), _ellipsize(d, " · ".join(str(p) for p in parts), L.sm, max_w), font=L.sm, fill=DIM)
         yy += L.line_sm
-        # line 3: the analyst's read (narrative beats bare disposition)
+        # line 3: the analyst's read (narrative beats bare disposition), one line
+        # but visibly clipped rather than silently cut mid-word
         story = sig.get("narrative") or sig.get("disposition")
         if story:
-            ln = _wrap(d, f"› {story}", L.sm, max_w)[0]
-            d.text((L.pad, yy), ln, font=L.sm, fill=CYAN)
+            d.text((L.pad, yy), _ellipsize(d, f"› {story}", L.sm, max_w), font=L.sm, fill=CYAN)
             yy += L.line_sm
         y = yy + 7
         if y > L.h - L.footer_h - L.line_md * 2:
             break
+    # overflow: never let a silent cap read as "that's all there is" (#137)
+    shown = min(n, len(sigs))
+    if len(sigs) > shown and y <= L.h - L.footer_h - L.line_sm:
+        extra = sigs[shown:]
+        far = sum(1 for x in extra if not (isinstance(x.get("distMi"), (int, float)) and x["distMi"] < 1500))
+        note = f"+{len(extra)} more" + (f" · {far} distant" if far == len(extra) else "")
+        d.text((L.pad, y), note, font=L.sm, fill=DIM)
 
 
 def _page_briefing(d, s, _sys, _summ, L: Layout) -> None:
@@ -1395,6 +1465,33 @@ def _fetch_radar_tile(host: str, path: str, z: int, x: int, y: int):
         return None
 
 
+def _page_traffic(d, s, c, L: Layout) -> None:
+    """Near-home road closures — "is my way out blocked?" (#137). A Tier-2
+    exception insert: disruptive but not life-safety, so it appears in the
+    rotation only when a closure is near, but doesn't promote or wake. Amber."""
+    closures = c.get("closures") or []
+    y = L.header_h + L.pad
+    d.text((L.pad, y), "TRAFFIC", font=L.sm, fill=CYAN)
+    y += L.line_sm + 8
+    if not closures:  # inserted-but-empty shouldn't happen; say so rather than blank
+        d.text((L.pad, L.h // 2 - 8), "no closures near you", font=L.md, fill=GREEN)
+        return
+    maxw = L.w - 2 * L.pad
+    for cl in closures[:4]:
+        head = f"⛔ {cl.get('route', 'road')} closed · {cl.get('dist_mi')}mi"
+        d.text((L.pad, y), _ellipsize(d, head, L.md, maxw), font=L.md, fill=AMBER)
+        y += L.line_md + 2
+        if cl.get("message"):
+            d.text((L.pad, y), _ellipsize(d, cl["message"], L.sm, maxw), font=L.sm, fill=DIM)
+            y += L.line_sm + 6
+        else:
+            y += 4
+        if y > L.h - L.footer_h - L.line_md:
+            break
+    if len(closures) > 4:
+        d.text((L.pad, y), f"+{len(closures) - 4} more", font=L.sm, fill=DIM)
+
+
 def _page_radar(d, s, c, L: Layout) -> None:
     """Regional precip radar centred on home — appears in the rotation only
     while echoes are near (the attention-aware carousel decides)."""
@@ -1550,13 +1647,13 @@ def _page_crime(d, s, c, L: Layout) -> None:
         return
     dist, item = near[_ticker_index(min(len(near), 12))]
     col = _CRIME_COL.get(item.get("group", "other"), DIM)
-    label = str(item.get("type", "")).replace("-", " ")[:40]
-    d.text((L.pad, ty), label, font=L.md, fill=col)
-    sub = str(item.get("address") or "location withheld")[:34]
+    label = str(item.get("type", "")).replace("-", " ")
+    d.text((L.pad, ty), _ellipsize(d, label, L.md, L.w - 2 * L.pad), font=L.md, fill=col)
+    sub = str(item.get("address") or "location withheld")
     ago_s = ""
     if isinstance(item.get("ts"), (int, float)):
         ago_s = " · " + _ago(max(0, int(time.time() - item["ts"] / 1000)))
-    d.text((L.pad, ty + L.line_md), f"{sub} · {dist:.1f}mi{ago_s}", font=L.sm, fill=DIM)
+    d.text((L.pad, ty + L.line_md), _ellipsize(d, f"{sub} · {dist:.1f}mi{ago_s}", L.sm, L.w - 2 * L.pad), font=L.sm, fill=DIM)
 
 
 def _page_system(d, s, sysinfo, summ, L: Layout) -> None:
@@ -1926,6 +2023,9 @@ class App:
         # Both best-effort; a failure leaves the key absent, never a stale alarm.
         self.conditions["emergency"] = fetch_emergency(self.url, self.token, lat, lon)
         self.conditions["quake"] = fetch_quakes(lat, lon)
+        # NB: "closures" not "traffic" — conditions["traffic"] is the SYSTEM
+        # 24h aircraft sparkline; a collision would fire TRAFFIC on every poll.
+        self.conditions["closures"] = fetch_traffic(self.url, self.token, lat, lon)
         self._dirty = True
 
     def _fetch_server_mode(self) -> None:
@@ -2301,6 +2401,15 @@ def selftest() -> int:
     fails += 0 if ok else 1
     print(f"  {'PASS' if ok else 'FAIL'}  a far or stale violent incident does NOT insert CRIME")
 
+    # #137: a near road closure inserts TRAFFIC (Tier-2 — never promoted)
+    pages, prom = rot(c_={"closures": [{"route": "CO-52", "dist_mi": 8}]}, hour=12)
+    ok = "TRAFFIC" in pages and "TRAFFIC" not in prom
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  a near closure inserts TRAFFIC without promoting it")
+    ok = "TRAFFIC" not in rot(hour=12)[0]
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  no closure ⇒ no TRAFFIC page")
+
     pages, prom = rot(s_={"feed": {"live": True}, "signals": [{"severity": "S1"}]},
                       c_={"alerts": [{"event": "Tornado Warning", "severity": "Extreme"}],
                           "radar": {"near": True}}, sys_=BATT, hour=20)
@@ -2364,6 +2473,9 @@ def _mock_fixtures(data: dict) -> dict:
         {"event": "Civil Emergency Message", "areaDesc": "Denver County", "until": "22:00"}])
     quake = dict(calm, quake={"mag": 4.8, "place": "12km WNW of Golden, CO",
                               "dist_mi": 38, "ts": (time.time() - 900) * 1000})
+    traffic = dict(calm, closures=[
+        {"route": "CO-52 W", "message": "Closed at US-85 for a crash investigation; use CO-119.", "dist_mi": 9},
+        {"route": "I-25 N", "message": "Two right lanes blocked, expect delays.", "dist_mi": 14}])
 
     return {
         "calm":     {"sysinfo": ac,       "cond": calm,    "ok": True},
@@ -2374,6 +2486,7 @@ def _mock_fixtures(data: dict) -> dict:
         "aurora":   {"sysinfo": ac,       "cond": aurora,  "ok": True},
         "emergency": {"sysinfo": ac,      "cond": emergency, "ok": True},
         "quake":    {"sysinfo": ac,       "cond": quake,   "ok": True},
+        "traffic":  {"sysinfo": ac,       "cond": traffic, "ok": True},
         "offline":  {"sysinfo": ac,       "cond": calm,    "ok": False},
         # same live frame, but with `near` forced so the RADAR page and the
         # carousel's insertion rule are exercisable on a dry day
@@ -2398,7 +2511,8 @@ def main() -> None:
                     help="run the sleep-policy test cases and exit")
     ap.add_argument("--fixture", metavar="NAME",
                     help="with --shot-all: render one named world-state "
-                         "(calm, alerts, tornado, battery, critical, aurora, offline); "
+                         "(calm, alerts, tornado, battery, critical, aurora, emergency, "
+                         "quake, traffic, offline, radar, dusk); "
                          "default renders every fixture into its own subdirectory")
     args = ap.parse_args()
 

@@ -23,9 +23,10 @@ spare SPI writes). Four standing content screens plus SYSTEM, ~50 s a cycle:
 Everything else is an **exception insert** — present only when it fires, slotted
 after NOW: **HAZARDS** (extreme weather / IPAWS civil emergency / nearby
 earthquake / airport ground-stop), **NEARBY SIGNALS** (a near S1), **RADAR**
-(precip near), **CRIME** (a violent incident within ~1 mi / 24 h). Red pages
-promote to the front with a red edge bar and 1.5× dwell; a civil emergency,
-severe weather, feed-down, or S1 also **wakes the sleeping screen**.
+(precip near), **TRAFFIC** (a road closure within ~25 mi), **CRIME** (a violent
+incident within ~1 mi / 24 h). Red pages promote to the front with a red edge
+bar and 1.5× dwell; a civil emergency, severe weather, feed-down, or S1 also
+**wakes the sleeping screen** (TRAFFIC/RADAR/CRIME insert but don't promote).
 
 Touch: short tap → next page; long-press (≥0.6 s) → force refresh. The RGB LED
 (Whisplay only) mirrors the header dot: green nominal · amber elevated/open-S2 ·
@@ -45,8 +46,8 @@ open ./shots           # one subdir per fixture: NN_<page>.png (00_now.png, …)
 ```
 
 `--fixture NAME` renders a single named world-state (`calm, alerts, tornado,
-battery, critical, aurora, emergency, quake, offline, radar, dusk`) — the states
-that can't be summoned on demand from the real world (DECISIONS #119).
+battery, critical, aurora, emergency, quake, traffic, offline, radar, dusk`) —
+the states that can't be summoned on demand from the real world (DECISIONS #119).
 
 ## Config (`pager.env`)
 | var | meaning |
