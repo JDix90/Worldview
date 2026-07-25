@@ -70,8 +70,11 @@ export interface LayerDef {
 // the trimmed default roster of DECISIONS #109 would never reach a browser
 // that had toggled anything. A key bump is a one-time reset to the new
 // defaults; toggles persist under the new key as before.
-const STORAGE_KEY = 'orrery:layers:v2';
-const LEGACY_KEYS = ['orrery:layers'];
+// v3 bump (2026-07-24, comprehensive review): six ambient layers demoted to
+// opt-in and four coverage-not-signal layers removed — same one-time reset so
+// the trimmed defaults reach a browser that already has v2 toggles saved.
+const STORAGE_KEY = 'orrery:layers:v3';
+const LEGACY_KEYS = ['orrery:layers', 'orrery:layers:v2'];
 
 export function loadEnabled(defs: LayerDef[]): Set<string> {
   try {

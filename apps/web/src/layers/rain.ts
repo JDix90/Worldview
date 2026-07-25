@@ -94,7 +94,7 @@ const fragmentShader = /* glsl */ `
 export const rainLayer: LayerDef = {
   id: 'rain',
   label: 'RAIN & STORMS',
-  defaultOn: true,
+  defaultOn: false, // opt-in (2026-07-24 review): ≥4h IMERG latency, duplicates city RADAR + phone
   attribution: 'NASA GIBS',
   init(ctx: LayerCtx): LayerInstance {
     const material = new THREE.ShaderMaterial({

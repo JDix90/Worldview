@@ -15,9 +15,6 @@ import { sunMoonLayer } from './sunmoon';
 import { aerosolLayer } from './aerosol';
 import { windLayer } from './wind/wind';
 import { bordersLayer } from './borders';
-import { shippingLanesLayer } from './shippingLanes';
-import { currentsLayer } from './ocean/currents';
-import { vesselsLayer } from './vessels/vessels';
 import { cloudsLayer } from './clouds';
 import { worldEventsLayer } from './worldEvents';
 import { rainLayer } from './rain';
@@ -25,10 +22,14 @@ import { airportDelaysLayer } from './airportDelays';
 
 export function buildLayerDefs(deps: { milStore: AircraftStore }): LayerDef[] {
   return [
-    // Default roster trimmed 2026-07-22 (DECISIONS #109): the flagship
-    // (flights + anomalies) and the event layers stay on; ambient texture
-    // (satellites, wind, currents, aerosol) and key-blocked sources
-    // (vessels, fires) are opt-in. Everything remains one toggle away.
+    // Default roster trimmed 2026-07-22 (DECISIONS #109) and again 2026-07-24
+    // (comprehensive review): the flagship (flights + anomalies) and the local/
+    // event layers stay on. Ambient/global furniture that duplicates a better
+    // home-relative readout — clouds, rain, jamming, aurora, world-events,
+    // sun&moon — is opt-in (defaultOn:false), and four coverage-not-signal
+    // layers for a landlocked owner (shipping lanes, ocean currents, starlink
+    // shell, vessels) were removed from the roster. Everything on the roster
+    // remains one toggle away.
     makeSatellitesLayer({
       id: 'sats',
       label: 'SATELLITES',
@@ -38,15 +39,6 @@ export function buildLayerDefs(deps: { milStore: AircraftStore }): LayerDef[] {
       color: 0x9adcf0,
       tickMs: 1000,
       maxInstances: 1200,
-    }),
-    makeSatellitesLayer({
-      id: 'starlink',
-      label: 'STARLINK SHELL',
-      defaultOn: false,
-      groups: ['starlink'],
-      color: 0x6f92b8,
-      tickMs: 2000,
-      maxInstances: 9000,
     }),
     // Flag-only def: the civil-aircraft rendering lives in AircraftLayer.tsx
     // (GlobeView reads this id from layersEnabled). Registered here so it
@@ -59,10 +51,7 @@ export function buildLayerDefs(deps: { milStore: AircraftStore }): LayerDef[] {
       init: () => ({ dispose() {} }),
     },
     makeMilLayer(deps.milStore),
-    vesselsLayer,
     windLayer,
-    currentsLayer,
-    shippingLanesLayer,
     cyclonesLayer,
     wildfiresLayer,
     // drape stack, bottom-up: clouds → rain → smoke (same renderOrder; mount

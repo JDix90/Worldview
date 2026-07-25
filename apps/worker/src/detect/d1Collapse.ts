@@ -114,8 +114,20 @@ export function detectCollapse(
 
     if (breaches < MIN_BREACHES) continue;
 
+    // Comprehensive review (2026-07-24, owner-approved): until a cell's baseline
+    // is MATURE, a "collapse" against a still-provisional median is far more
+    // likely diurnal drift or thin oceanic receiver coverage than a real event
+    // — the analyst triages these to "noise" nightly and they dilute the S2
+    // feed the gate reviewer skims. Hold immature-baseline collapses to S3
+    // (digest-only, never badged/pushed); the S1/S2 ladder resumes once the
+    // baseline matures. (D0's regional coverage guard remains the proper long-term
+    // fix; this is the calibration-window mitigation.)
     const severity: Severity =
-      drop >= S1_DROP && base.median >= S1_MEDIAN && breaches >= S1_BREACHES ? 'S1' : 'S2';
+      maturity !== 'mature'
+        ? 'S3'
+        : drop >= S1_DROP && base.median >= S1_MEDIAN && breaches >= S1_BREACHES
+          ? 'S1'
+          : 'S2';
     const dropPct = Math.round(drop * 100);
     events.push({
       kind: 'traffic_collapse',

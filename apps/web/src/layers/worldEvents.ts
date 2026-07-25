@@ -94,7 +94,7 @@ const fragmentShader = /* glsl */ `
 export const worldEventsLayer: LayerDef = {
   id: 'events',
   label: 'WORLD EVENTS',
-  defaultOn: true,
+  defaultOn: false, // opt-in (2026-07-24 review): global floods/droughts/volcanoes, ambient, no Signal, no local relevance
   attribution: 'GDACS',
   init(ctx: LayerCtx): LayerInstance {
     const geometry = new THREE.PlaneGeometry(2, 2);

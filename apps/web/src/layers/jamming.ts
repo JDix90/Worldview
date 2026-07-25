@@ -40,7 +40,7 @@ function fractionColor(f: number): THREE.Color {
 export const jammingLayer: LayerDef = {
   id: 'jamming',
   label: 'GPS JAMMING',
-  defaultOn: true,
+  defaultOn: false, // opt-in (2026-07-24 review): all watch regions overseas; D3 already carries it into the briefing
   attribution: 'ORRERY integrity sweeps',
   init(ctx: LayerCtx): LayerInstance {
     const group = new THREE.Group();
