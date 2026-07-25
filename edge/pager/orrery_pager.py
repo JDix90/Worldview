@@ -164,18 +164,25 @@ def fetch_summary(url: str, token: str, timeout: float = 8.0) -> Optional[dict]:
 
 
 def overall_status(s: dict) -> str:
-    """green | amber | red — the LED / header dot."""
+    """green | amber | red — the LED / header dot.
+
+    Red is reserved for *local / instrument* alarms a person in this room would
+    act on: a dead feed, a shadow-S1 in the last day, a live S1 signal. World
+    state — the GPS-jamming integrity watch regions, all distant and
+    geopolitical (removed from the panel proper in #101) — reads **amber at
+    most, never red**, even when severe. This drives three surfaces at once
+    (header dot, NOW's red-promotion, and the sleep policy via `_apply_sleep`),
+    so a chronic Baltic 'severe' verdict must not own the dot, promote the local
+    weather page, or hold the living-room screen awake all night (#134)."""
     feed = s.get("feed", {})
     if not feed.get("live", False):
         return "red"
     if s.get("shadowS1Last24h", 0) > 0:
         return "red"
-    integ = s.get("integrity", [])
-    if any(r.get("verdict") == "severe" for r in integ):
-        return "red"
     if any(sig.get("severity") == "S1" for sig in s.get("signals", [])):
         return "red"
-    if any(r.get("verdict") == "elevated" for r in integ):
+    integ = s.get("integrity", [])
+    if any(r.get("verdict") in ("severe", "elevated") for r in integ):
         return "amber"
     if s.get("signals"):
         return "amber"
@@ -217,6 +224,41 @@ def weather_status(alerts: list) -> str:
             return "red"
         worst = "amber"
     return worst
+
+
+def _hazards(s: dict, c: dict) -> list:
+    """Active local hazards as (text, is_red), in life-safety order: NWS
+    weather alerts (a Tornado Warning must headline, not a ground stop), then
+    IPAWS civil emergencies, then a significant nearby earthquake, then the
+    home-airport disruption. Empty when quiet. Shared by NOW's folded line and
+    the HAZARDS escalation insert (#135/#136) so both read alike."""
+    out = []
+    for a in c.get("alerts", []):
+        line = f"⚠ {a.get('event', 'Alert')}"
+        if a.get("until"):
+            line += f" · until {a['until']}"
+        out.append((line, weather_status([a]) == "red"))
+    for e in c.get("emergency") or []:
+        line = f"⬢ {e.get('event', 'Emergency')}"
+        if e.get("areaDesc"):
+            line += f" · {e['areaDesc']}"
+        out.append((line, True))  # a near civil emergency is always red
+    q = c.get("quake")
+    if q:
+        line = f"⚠ M{q.get('mag')} earthquake · {q.get('dist_mi')}mi"
+        if q.get("ts"):
+            line += f" · {_ago(max(0, int(time.time() - q['ts'] / 1000)))} ago"
+        out.append((line, True))
+    ap = s.get("airport")
+    if ap:
+        line = f"✈ {ap.get('code', '?')}: {str(ap.get('type', '')).replace('-', ' ')}"
+        if ap.get("detail"):
+            line += f" · {ap['detail']}"
+        out.append((line, ap.get("type") in ("ground-stop", "closure")))
+    # red hazards ahead of amber so the escalation headlines the worst; stable
+    # sort keeps the life-safety order above within the reds
+    out.sort(key=lambda t: 0 if t[1] else 1)
+    return out
 
 
 def worse(a: str, b: str) -> str:
@@ -424,6 +466,70 @@ def fetch_crime(lat: float, lon: float) -> dict:
         return {"covered": True, "error": True}
 
 
+# ── near-home emergencies: IPAWS civil alerts + significant quakes (#136) ──
+# The two most "local + critical + invisible-on-the-Pi-until-now" layers. Both
+# feed the HAZARDS escalation (insert + promote to front); a civil emergency
+# also wakes a sleeping screen. Denver almost never sees either, so both are
+# exception inserts — silent nearly always, loud when they matter.
+_USGS_FEED = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson"
+QUAKE_MIN_MAG = 4.0     # ~"felt / light damage possible"; below this isn't a glance concern
+QUAKE_RADIUS_MI = 150.0
+EMERGENCY_NEAR_DEG = 1.5  # ~100 mi, matching the browser EMERGENCY layer (#122)
+
+
+def fetch_quakes(lat: float, lon: float) -> Optional[dict]:
+    """Nearest significant earthquake near home (USGS 2.5_day feed — keyless,
+    CORS-open, fetched direct like crime). Returns {mag, place, dist_mi, ts} for
+    the closest M≥QUAKE_MIN_MAG within QUAKE_RADIUS_MI, or None."""
+    import math
+    try:
+        r = requests.get(_USGS_FEED, timeout=12)
+        r.raise_for_status()
+        coslat = math.cos(math.radians(lat))
+        best = None
+        for f in r.json().get("features", []):
+            p = f.get("properties") or {}
+            co = (f.get("geometry") or {}).get("coordinates") or []
+            mag = p.get("mag")
+            if not isinstance(mag, (int, float)) or mag < QUAKE_MIN_MAG or len(co) < 2:
+                continue
+            dist = math.hypot((co[0] - lon) * 69.0 * coslat, (co[1] - lat) * 69.0)
+            if dist <= QUAKE_RADIUS_MI and (best is None or dist < best["dist_mi"]):
+                best = {"mag": round(mag, 1), "place": p.get("place") or "",
+                        "dist_mi": round(dist), "ts": p.get("time")}
+        return best
+    except Exception as e:
+        print(f"[display] quake fetch failed: {e}", file=sys.stderr)
+        return None
+
+
+def fetch_emergency(url: str, token: str, lat: float, lon: float) -> list:
+    """Near-home IPAWS non-weather civil emergencies (evacuation / shelter /
+    hazmat / law-enforcement / AMBER), via the server proxy the browser already
+    uses (#122) — the server owns the CAP-XML parse. Returns a list of
+    {event, headline, areaDesc, until} within ~100 mi, or []. Best-effort."""
+    try:
+        r = requests.get(f"{url}/api/proxy/ipaws",
+                         headers={"Authorization": f"Bearer {token}"}, timeout=10)
+        r.raise_for_status()
+        out = []
+        for a in r.json().get("alerts", []):
+            near = any(
+                len(pt) > 1 and abs(pt[1] - lat) < EMERGENCY_NEAR_DEG and abs(pt[0] - lon) < EMERGENCY_NEAR_DEG
+                for ring in (a.get("rings") or []) for pt in ring
+            )
+            if not near:
+                continue
+            exp = a.get("expiresMs")
+            until = time.strftime("%H:%M", time.localtime(exp / 1000)) if isinstance(exp, (int, float)) else None
+            out.append({"event": a.get("event") or "Emergency",
+                        "headline": a.get("headline"), "areaDesc": a.get("areaDesc"), "until": until})
+        return out
+    except Exception as e:
+        print(f"[display] ipaws fetch failed: {e}", file=sys.stderr)
+        return []
+
+
 # ─────────────────────────── text helpers ───────────────────────────
 def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_w: int) -> list[str]:
     words, lines, cur = text.split(), [], ""
@@ -458,20 +564,22 @@ def _ago(sec: int) -> str:
 
 
 # ─────────────────────────── page rendering ───────────────────────────
-# Living-room lineup (2026-07-21): TODAY (weather/alerts) leads; instrument
-# vitals moved to SYSTEM; GPS jamming left the Pi entirely (browser only).
-# One information architecture with the browser dashboard (DECISIONS #115):
-# same sections, same order. SYSTEM is panel-only (instrument vitals) and
-# rides last. Full cycle ≈ 78 s at the dwell times below.
-PAGES = ["NOW", "BRIEFING", "CRIME", "OVERHEAD", "NEARBY SIGNALS",
-         "HAZARDS", "SKY", "SPACE", "SYSTEM"]
+# The living-room lineup, adversarially re-scoped (DECISIONS #135): four
+# standing content screens + SYSTEM (panel-only vitals, rides last). Everything
+# else is an EXCEPTION INSERT — present in the rotation only when it's relevant,
+# invisible otherwise (the RADAR pattern, generalized): a passer-by should see a
+# dense, local, current page every glance, not filler. The steady-state cycle is
+# NOW → BRIEFING → OVERHEAD → SKY(gated) → SYSTEM (~50 s); HAZARDS (extreme
+# weather), NEARBY SIGNALS (a near S1), RADAR (precip near), and CRIME (a violent
+# incident nearby) slot in after NOW only when they fire. SPACE folded into SKY;
+# CRIME/HAZARDS/NEARBY-SIGNALS demoted from standing to insert.
+PAGES = ["NOW", "BRIEFING", "OVERHEAD", "SKY", "SYSTEM"]
 
-# Per-page dwell (seconds), owner-set. Replaces the old single CAROUSEL_SEC
-# with a 2.5x/0.8x multiplier — pages differ too much in reading time.
+# Per-page dwell (seconds). Standing pages first, then the exception inserts
+# (rare, so they can afford a longer read when they do appear).
 DWELL_SEC = {
-    "RADAR": 8,
-    "NOW": 10, "BRIEFING": 12, "CRIME": 12, "OVERHEAD": 12,
-    "NEARBY SIGNALS": 8, "HAZARDS": 6, "SKY": 6, "SPACE": 6, "SYSTEM": 6,
+    "NOW": 10, "BRIEFING": 14, "OVERHEAD": 12, "SKY": 8, "SYSTEM": 6,
+    "HAZARDS": 10, "NEARBY SIGNALS": 12, "RADAR": 8, "CRIME": 10,
 }
 
 # Ticker: one item at a time, swapped every TICKER_SEC. Deliberately not a
@@ -525,6 +633,8 @@ def _page_is_red(page: str, s: dict, c: dict, sysinfo: dict) -> bool:
     if page == "HAZARDS":
         if weather_status(c.get("alerts", [])) == "red":
             return True
+        if c.get("emergency") or c.get("quake"):  # IPAWS civil alert / nearby quake (#136)
+            return True
         ap = s.get("airport") or {}
         return ap.get("type") in ("ground-stop", "closure")
     if page == "NEARBY SIGNALS":
@@ -534,22 +644,81 @@ def _page_is_red(page: str, s: dict, c: dict, sysinfo: dict) -> bool:
     return False
 
 
-def compute_rotation(s: dict, c: dict, sysinfo: dict, hour_local: int) -> tuple:
-    """(pages, promoted) — the live rotation and which pages are urgent.
+def _near_s1(s: dict, radius_mi: float = 250.0) -> bool:
+    """A genuinely-near S1 signal exists (#135). Distant S2 noise never inserts;
+    an S1 with unknown distance is treated as near (corroborated + serious)."""
+    for sig in s.get("signals") or []:
+        if sig.get("severity") != "S1":
+            continue
+        d = sig.get("distMi")
+        if d is None or d <= radius_mi:
+            return True
+    return False
 
-    Rules, in order:
-      1. SKY carries tonight's sky: in rotation only 15:00–07:00.
-      2. RADAR exists only while precip is within RADAR_NEAR_MI of home,
-         slotted after NOW (rain-about-to-hit-the-house is a now-concern).
-      3. Red pages move to the front (stable order), keep their identity via
-         a red edge bar, and get 1.5× dwell (applied by the caller).
-    Any exception in the caller falls back to the static PAGES table — the
-    carousel must never die of cleverness.
+
+def _violent_near(s: dict, c: dict, radius_mi: float = 1.0, within_s: int = 86400) -> bool:
+    """A violent crime within ~radius_mi of home in the last ~within_s (#135).
+    This is the only crime worth interrupting a living-room glance for; the
+    weekly map stays in the browser. Reuses the same equirectangular distance
+    as the CRIME ticker (~:1364)."""
+    import math
+    home = s.get("home") or {}
+    hlat, hlon = home.get("lat"), home.get("lon")
+    crime = c.get("crime")
+    if hlat is None or not isinstance(crime, dict):
+        return False
+    coslat = math.cos(math.radians(hlat))
+    now_ms = time.time() * 1000
+    for i in crime.get("incidents") or []:
+        if i.get("group") != "violent":
+            continue
+        ts = i.get("ts")
+        if not isinstance(ts, (int, float)) or now_ms - ts > within_s * 1000:
+            continue
+        dx = (i["lon"] - hlon) * 69.0 * coslat
+        dy = (i["lat"] - hlat) * 69.0
+        if math.hypot(dx, dy) <= radius_mi:
+            return True
+    return False
+
+
+def compute_rotation(s: dict, c: dict, sysinfo: dict, hour_local: int) -> tuple:
+    """(pages, promoted) — the live rotation and which pages are urgent (#135).
+
+    Standing: NOW, BRIEFING, OVERHEAD, SKY (only 15:00–07:00), SYSTEM last.
+    Exception inserts, slotted right after NOW in urgency order, each present
+    ONLY when it fires:
+      · HAZARDS       — extreme/red weather (a full-screen escalation)
+      · NEARBY SIGNALS— a genuinely-near S1 (carries the signal's payload)
+      · RADAR         — precip within range (rain about to hit the house)
+      · CRIME         — a violent incident within ~1 mi in the last 24 h
+    Then red pages (incl. any red insert, via `_page_is_red`) move to the front,
+    keep a red edge bar, and get 1.5× dwell (applied by the caller). Any
+    exception in the caller falls back to static PAGES — the carousel must never
+    die of cleverness.
     """
     pages = [p for p in PAGES if p != "SKY" or hour_local >= 15 or hour_local < 7]
-    radar = c.get("radar") or {}
-    if radar.get("near"):
-        pages.insert(pages.index("NOW") + 1, "RADAR")
+    at = pages.index("NOW") + 1
+
+    def insert(page: str) -> None:
+        nonlocal at
+        if page not in pages:
+            pages.insert(at, page)
+            at += 1
+
+    # HAZARDS inserts + promotes whenever it would render red — extreme weather,
+    # an IPAWS civil emergency, a nearby earthquake, OR an airport ground-stop /
+    # closure (#136). Same predicate as the promotion below, so "inserted" and
+    # "urgent" can't drift. Routine (amber) hazards ride NOW's folded line only.
+    if _page_is_red("HAZARDS", s, c, sysinfo):
+        insert("HAZARDS")
+    if _near_s1(s):
+        insert("NEARBY SIGNALS")
+    if (c.get("radar") or {}).get("near"):
+        insert("RADAR")
+    if _violent_near(s, c):
+        insert("CRIME")
+
     promoted = tuple(p for p in pages if _page_is_red(p, s, c, sysinfo))
     if promoted:
         pages = list(promoted) + [p for p in pages if p not in promoted]
@@ -587,9 +756,13 @@ def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
         status = overall_status(summary.raw)
         if summary.stale_s > POLL_SEC * 3:
             status = "stale"
-    # weather severity shares the dot: a Tornado Warning is a red, full stop
+    # weather severity + a near civil emergency share the dot: a Tornado Warning
+    # or an IPAWS evacuation is a red, full stop (#136). A quake/ground-stop
+    # promotes a red HAZARDS page but leaves the dot amber (it didn't wake you).
     if conditions:
         status = worse(status, weather_status(conditions.get("alerts", [])))
+        if conditions.get("emergency"):
+            status = worse(status, "red")
     r = L.header_h // 3
     cy = L.header_h // 2
     d.ellipse((L.w - L.pad - 2 * r, cy - r, L.w - L.pad, cy + r), fill=STATUS_RGB[status])
@@ -606,14 +779,14 @@ def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
         d.rectangle((0, L.header_h, 3, L.h - L.footer_h), fill=RED)
     s = summary.raw
     c = conditions or {}
-    # pages driven by the conditions bundle (weather/aqi/sky/space/crime)
-    if page in ("NOW", "CRIME", "HAZARDS", "SKY", "SPACE", "RADAR"):
+    # pages driven by the conditions bundle (weather/aqi/sky/crime). CRIME,
+    # HAZARDS and RADAR are exception inserts now (#135) but render the same way.
+    if page in ("NOW", "CRIME", "HAZARDS", "SKY", "RADAR"):
         {
             "NOW": _page_now,
             "CRIME": _page_crime,
             "HAZARDS": _page_hazards,
             "SKY": _page_sky,
-            "SPACE": _page_space,
             "RADAR": _page_radar,
         }[page](d, s, c, L)
     else:
@@ -628,9 +801,9 @@ def render(summary: Optional[Summary], page_idx: int, sysinfo: dict, L: Layout,
 
 
 def _page_now(d, s: dict, c: dict, L: Layout) -> None:
-    """The living-room glance: big weather + AQI. All fields optional.
-    Hazards / sky / space split onto their own pages (DECISIONS #115) so the
-    panel's page set matches the browser dashboard's sections."""
+    """The living-room glance: big weather + AQI, plus the folded hazard line —
+    the page you always land on carries the one thing you must know (#135). An
+    Extreme alert additionally escalates to its own promoted HAZARDS insert."""
     y0 = L.header_h + L.pad
     temp = c.get("temp")
     # big temperature + condition
@@ -661,37 +834,53 @@ def _page_now(d, s: dict, c: dict, L: Layout) -> None:
         d.text((L.pad, y), aqi_text, font=L.md, fill=col)
         d.text((L.pad + d.textlength(aqi_text, font=L.md) + 10, y + 2),
                f"PM2.5 {c.get('pm25', '—')}", font=L.sm, fill=DIM)
-        y += L.line_md + 8
+        y += L.line_md + 12
+    # folded hazards (the payload of the retired standing HAZARDS page). The
+    # lower half now carries what you must know; quiet says so, in green.
+    haz = _hazards(s, c)
+    if haz:
+        for text, is_red in haz[:3]:
+            d.text((L.pad, y), text[:52], font=L.md, fill=RED if is_red else AMBER)
+            y += L.line_md + 4
+            if y > L.h - L.footer_h - L.line_md:
+                break
+    else:
+        d.text((L.pad, y), "✓ nothing active near you", font=L.md, fill=GREEN)
 
 
 def _page_hazards(d, s: dict, c: dict, L: Layout) -> None:
-    """Exception-based: home-airport disruption + active NWS alerts. Quiet is
-    the normal state and says so (fires are browser-only — no FIRMS source
-    here, so their absence is not reported as 'unavailable')."""
+    """Extreme-weather escalation (#135): only ever inserted+promoted when
+    weather is red, so it SHOUTS — the headline alert in the large font over a
+    red band, the rest listed below. (Routine hazards ride NOW's folded line;
+    this page exists for the Tornado-Warning-class event, review §5.)"""
+    haz = _hazards(s, c)
+    reds = [t for t, r in haz if r]
     y = L.header_h + L.pad
-    d.text((L.pad, y), "HAZARDS", font=L.sm, fill=CYAN)
-    y += L.line_sm + 8
-    shown = False
-    ap = s.get("airport")
-    if ap:
-        is_red = ap.get("type") in ("ground-stop", "closure")
-        line = f"✈ {ap.get('code', '?')}: {str(ap.get('type', '')).replace('-', ' ')}"
-        if ap.get("detail"):
-            line += f" · {ap['detail']}"
-        d.text((L.pad, y), line, font=L.md, fill=RED if is_red else AMBER)
-        y += L.line_md + 4
-        shown = True
-    for a in c.get("alerts", []):
-        is_red = weather_status([a]) == "red"
-        line = f"⚠ {a.get('event', 'Alert')}"
-        if a.get("until"):
-            line += f" · until {a['until']}"
-        d.text((L.pad, y), line, font=L.md, fill=RED if is_red else AMBER)
-        y += L.line_md + 4
-        shown = True
-        if y > L.h - L.footer_h - L.line_md:
-            break
-    if not shown:
+    if reds:
+        band_h = round(L.lg.size * 1.7)
+        d.rectangle((0, L.header_h, L.w, L.header_h + band_h), fill=(70, 18, 18))
+        # event name big in the band, its "until …" tail on a line below, so a
+        # long headline doesn't run off the panel edge.
+        event, _sep, rest = reds[0].partition(" · ")
+        d.text((L.pad, y + 2), event[:34], font=L.lg, fill=(255, 210, 210))
+        y = L.header_h + band_h + L.pad
+        if rest:
+            d.text((L.pad, y), rest, font=L.md, fill=RED)
+            y += L.line_md + 4
+        for text, is_red in haz:
+            if text == reds[0]:
+                continue
+            d.text((L.pad, y), text[:52], font=L.md, fill=RED if is_red else AMBER)
+            y += L.line_md + 4
+            if y > L.h - L.footer_h - L.line_md:
+                break
+    elif haz:  # defensive: inserted without a red (shouldn't happen) — list it
+        d.text((L.pad, y), "HAZARDS", font=L.sm, fill=CYAN)
+        y += L.line_sm + 8
+        for text, is_red in haz:
+            d.text((L.pad, y), text[:52], font=L.md, fill=AMBER)
+            y += L.line_md + 4
+    else:
         d.text((L.pad, y), "nothing active near you", font=L.md, fill=GREEN)
 
 
@@ -713,8 +902,10 @@ def _draw_moon_disc(d, cx: int, cy: int, R: int, illumination: float, waxing: bo
 
 
 def _page_sky(d, _s: dict, c: dict, L: Layout) -> None:
-    """Tonight's sky: next visible ISS pass + moon phase. Unconditional now
-    that it owns a page (it used to appear only after ~sunset−1h)."""
+    """Tonight's sky: next visible ISS pass + moon phase, with space weather
+    (aurora / a geomagnetic storm) folded in **only when it's worth looking up**
+    (#135 — the old SPACE page printed 'Kp 2.0 quiet' ~360 nights/yr). Gated to
+    15:00–07:00 by compute_rotation. The one 'go outside' screen."""
     y = L.header_h + L.pad
     d.text((L.pad, y), "SKY", font=L.sm, fill=CYAN)
     y += L.line_sm + 8
@@ -745,35 +936,22 @@ def _page_sky(d, _s: dict, c: dict, L: Layout) -> None:
         d.text((L.pad, y), f"☾ {moon['name']}", font=L.md, fill=WHITE)
         y += L.line_md + 2
         d.text((L.pad, y), f"{round(moon['illumination'] * 100)}% lit", font=L.sm, fill=DIM)
-
-
-def _page_space(d, _s: dict, c: dict, L: Layout) -> None:
-    """Space weather: Kp forecast and whether aurora is worth walking outside."""
-    y = L.header_h + L.pad
-    d.text((L.pad, y), "SPACE", font=L.sm, fill=CYAN)
-    y += L.line_sm + 8
-    kp = c.get("kp_max")
-    if kp is not None:
-        col = RED if kp >= 7 else AMBER if kp >= 5 else GREEN
-        d.text((L.pad, y), f"Kp {kp:.1f}", font=L.huge, fill=col)
-        tw = d.textlength(f"Kp {kp:.1f}", font=L.huge)
-        d.text((L.pad + tw + 12, y + round(L.huge.size * 0.35)),
-               "storm" if kp >= 5 else "quiet", font=L.md, fill=col)
-        y += round(L.huge.size * 1.25)
-        d.text((L.pad, y), "max forecast, next 24 h", font=L.sm, fill=DIM)
-        y += L.line_sm + 8
-    else:
-        d.text((L.pad, y), "no Kp forecast", font=L.md, fill=DIM)
-        y += L.line_md + 8
+        y += L.line_sm + 10
+    # ── space weather, exception-based (no 'quiet' filler) ───────────────
     aurora = c.get("aurora")
+    kp = c.get("kp_max")
     if aurora in ("horizon", "overhead"):
-        word = "likely overhead" if aurora == "overhead" else "possible on the northern horizon"
+        word = "likely overhead" if aurora == "overhead" else "possible on the N horizon"
         d.text((L.pad, y), f"✦ aurora {word}", font=L.md,
                fill=GREEN if aurora == "overhead" else AMBER)
         y += L.line_md + 2
-        d.text((L.pad, y), "look north late", font=L.sm, fill=DIM)
-    else:
-        d.text((L.pad, y), "aurora not visible at your latitude", font=L.sm, fill=DIM)
+        kp_note = f"Kp {kp:.1f} · " if isinstance(kp, (int, float)) else ""
+        d.text((L.pad, y), f"{kp_note}look north late", font=L.sm, fill=DIM)
+    elif isinstance(kp, (int, float)) and kp >= 5:
+        col = RED if kp >= 7 else AMBER
+        d.text((L.pad, y), f"⚡ Kp {kp:.1f} — geomagnetic storm", font=L.md, fill=col)
+        y += L.line_md + 2
+        d.text((L.pad, y), "aurora possible far north · max forecast 24 h", font=L.sm, fill=DIM)
 
 
 def _footer(d: ImageDraw.ImageDraw, page_idx: int, sysinfo: dict, L: Layout,
@@ -785,9 +963,15 @@ def _footer(d: ImageDraw.ImageDraw, page_idx: int, sysinfo: dict, L: Layout,
         col = CYAN if i == page_idx else DIM
         d.ellipse((cx, y + L.footer_h // 3, cx + 6, y + L.footer_h // 3 + 6),
                   fill=col if i == page_idx else None, outline=col)
+    # Clock + battery, both — the X1200 UPS always reports a battery level, so
+    # the old `battery else clock` meant the appliance never showed the time
+    # (#134). The header takeover owns battery *urgency* when discharging; this
+    # footer is the always-on passive readout: "07:14 · 82%".
     batt = sysinfo.get("battery_pct")
-    label = f"{batt}%" if batt is not None else sysinfo.get("clock", "")
-    d.text((L.w - L.pad - d.textlength(label, font=L.sm), y + 2), label, font=L.sm, fill=DIM)
+    parts = [p for p in (sysinfo.get("clock", ""), f"{batt}%" if batt is not None else "") if p]
+    label = " · ".join(parts)
+    if label:
+        d.text((L.w - L.pad - d.textlength(label, font=L.sm), y + 2), label, font=L.sm, fill=DIM)
 
 
 def _col_x(L: Layout) -> int:
@@ -873,10 +1057,12 @@ def _page_briefing(d, s, _sys, _summ, L: Layout) -> None:
            font=L.sm, fill=DIM if b.get("quiet") else AMBER)
     y = y0 + L.line_sm + 8
     max_w = L.w - 2 * L.pad
-    # lead: the bottom-line verdict (prominent)
-    for ln in _wrap(d, _demark(b.get("lead", "")), L.md, max_w):
-        d.text((L.pad, y), ln, font=L.md, fill=WHITE)
-        y += L.line_md
+    # lead: the bottom-line verdict — the headline a passer-by reads in one
+    # glance, so it gets the large font (#135); the digest pages below it.
+    for ln in _wrap(d, _demark(b.get("lead", "")), L.lg, max_w):
+        d.text((L.pad, y), ln, font=L.lg, fill=WHITE)
+        y += round(L.lg.size * 1.2)
+    y += 2
     # what-changed: the substance (dim, fills the middle), leaving room for the
     # sign-off pinned near the footer
     signoff = _demark(b.get("signoff") or "")
@@ -1736,6 +1922,10 @@ class App:
             self._crime_at = time.time()
             self._crime_cache = fetch_crime(lat, lon)
         self.conditions["crime"] = self._crime_cache
+        # Near-home emergencies (#136): IPAWS civil alerts + significant quakes.
+        # Both best-effort; a failure leaves the key absent, never a stale alarm.
+        self.conditions["emergency"] = fetch_emergency(self.url, self.token, lat, lon)
+        self.conditions["quake"] = fetch_quakes(lat, lon)
         self._dirty = True
 
     def _fetch_server_mode(self) -> None:
@@ -1786,6 +1976,11 @@ class App:
             status = overall_status(self.summary.raw)
         if self.conditions:
             status = worse(status, weather_status(self.conditions.get("alerts", [])))
+            # A near IPAWS civil emergency (evacuation / shelter / hazmat) is the
+            # one thing worth lighting the dark room for (#136). A quake is NOT —
+            # it has already happened, so it promotes when awake but never wakes.
+            if self.conditions.get("emergency"):
+                status = "red"
         awake = decide_awake(
             self._mode,
             now.tm_hour * 60 + now.tm_min,
@@ -1953,6 +2148,23 @@ def selftest() -> int:
         ok = got == expect
         fails += 0 if ok else 1
         print(f"  {'PASS' if ok else 'FAIL'}  {desc}: {got} (want {expect})")
+    # overall_status: local/instrument reds vs world state (#134). The key case
+    # is a chronic 'severe' integrity verdict → amber, NOT red — so it can't own
+    # the dot, promote NOW, or (via _apply_sleep) hold the screen awake.
+    LIVE = {"feed": {"live": True}}
+    for desc, s_, expect in [
+        ("status feed-down red", {"feed": {"live": False}}, "red"),
+        ("status shadow-S1 red", dict(LIVE, shadowS1Last24h=1), "red"),
+        ("status live-S1 red", dict(LIVE, signals=[{"severity": "S1"}]), "red"),
+        ("status severe integrity AMBER not red", dict(LIVE, integrity=[{"verdict": "severe"}]), "amber"),
+        ("status elevated integrity amber", dict(LIVE, integrity=[{"verdict": "elevated"}]), "amber"),
+        ("status S2 signals amber", dict(LIVE, signals=[{"severity": "S2"}]), "amber"),
+        ("status quiet green", LIVE, "green"),
+    ]:
+        got = overall_status(s_)
+        ok = got == expect
+        fails += 0 if ok else 1
+        print(f"  {'PASS' if ok else 'FAIL'}  {desc}: {got} (want {expect})")
     # sky module: moon-phase anchors (lunar verify dates) + structural pass check
     try:
         import sky
@@ -2025,14 +2237,80 @@ def selftest() -> int:
     fails += 0 if ok else 1
     print(f"  {'PASS' if ok else 'FAIL'}  live S1: NOW + NEARBY SIGNALS co-promoted")
 
+    # a chronic severe integrity verdict alone must NOT promote NOW (#134)
+    pages, prom = rot(s_={"feed": {"live": True}, "integrity": [{"verdict": "severe"}]}, hour=12)
+    ok = "NOW" not in prom and not prom
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  severe integrity does not promote NOW")
+
+    # ── carousel re-scope (#135): standing set + exception inserts ────────
+    pages, prom = rot(hour=12)
+    ok = list(pages) == ["NOW", "BRIEFING", "OVERHEAD", "SYSTEM"] and not prom
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  quiet noon: 4 standing (NOW/BRIEFING/OVERHEAD/SYSTEM), no SKY")
+
+    ok = "SPACE" not in rot(hour=20)[0] and "CRIME" not in rot(hour=20)[0]
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  SPACE + CRIME are no longer standing pages")
+
+    # HAZARDS is inserted+promoted only on red weather (tornado promotion survives)
+    pages, prom = rot(c_={"alerts": [{"event": "Tornado Warning", "severity": "Extreme"}]}, hour=12)
+    ok = pages[0] == "HAZARDS" and "HAZARDS" in prom and pages.index("HAZARDS") == 0
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  extreme weather inserts + promotes HAZARDS")
+    ok = "HAZARDS" not in rot(c_={"alerts": [{"event": "Heat Advisory", "severity": "Moderate"}]}, hour=12)[0]
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  a routine advisory does NOT insert HAZARDS (rides NOW)")
+
+    # #136: airport ground-stop, IPAWS civil emergency, and a nearby quake each
+    # insert + promote HAZARDS; a ground-delay (amber) rides NOW's line.
+    for label, s_, c_ in [
+        ("airport ground-stop", {"feed": {"live": True}, "airport": {"code": "DEN", "type": "ground-stop"}}, None),
+        ("IPAWS civil emergency", None, {"emergency": [{"event": "Civil Emergency", "areaDesc": "Denver County"}]}),
+        ("nearby earthquake", None, {"quake": {"mag": 4.8, "dist_mi": 40, "place": "near Golden, CO"}}),
+    ]:
+        pages, prom = rot(s_=s_, c_=c_, hour=12)
+        ok = pages[0] == "HAZARDS" and "HAZARDS" in prom
+        fails += 0 if ok else 1
+        print(f"  {'PASS' if ok else 'FAIL'}  {label} inserts + promotes HAZARDS")
+    ok = "HAZARDS" not in rot(s_={"feed": {"live": True}, "airport": {"code": "DEN", "type": "ground-delay"}}, hour=12)[0]
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  an airport ground-delay (amber) does NOT insert HAZARDS")
+
+    # near-S1 inserts NEARBY SIGNALS; a distant S2 does not
+    pages, prom = rot(s_={"feed": {"live": True}, "signals": [{"severity": "S1", "distMi": 40}]}, hour=12)
+    ok = "NEARBY SIGNALS" in pages and "NEARBY SIGNALS" in prom
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  near S1 inserts + promotes NEARBY SIGNALS")
+    ok = "NEARBY SIGNALS" not in rot(s_={"feed": {"live": True}, "signals": [{"severity": "S2", "distMi": 40}]}, hour=12)[0]
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  a distant S2 does NOT insert NEARBY SIGNALS")
+
+    # violent-crime insert: within 1mi/24h inserts CRIME; far/old does not
+    home_s = {"feed": {"live": True}, "home": {"lat": 39.74, "lon": -104.99}}
+    fresh = {"crime": {"incidents": [{"group": "violent", "lat": 39.745, "lon": -104.99,
+                                      "ts": (time.time() - 3600) * 1000}]}}
+    ok = "CRIME" in rot(s_=home_s, c_=fresh, hour=12)[0]
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  violent crime <1mi/24h inserts CRIME")
+    far = {"crime": {"incidents": [{"group": "violent", "lat": 40.5, "lon": -104.99,
+                                    "ts": (time.time() - 3600) * 1000}]}}
+    old = {"crime": {"incidents": [{"group": "violent", "lat": 39.745, "lon": -104.99,
+                                    "ts": (time.time() - 5 * 86400) * 1000}]}}
+    ok = "CRIME" not in rot(s_=home_s, c_=far, hour=12)[0] and "CRIME" not in rot(s_=home_s, c_=old, hour=12)[0]
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  a far or stale violent incident does NOT insert CRIME")
+
     pages, prom = rot(s_={"feed": {"live": True}, "signals": [{"severity": "S1"}]},
                       c_={"alerts": [{"event": "Tornado Warning", "severity": "Extreme"}],
                           "radar": {"near": True}}, sys_=BATT, hour=20)
+    # standing 5 (NOW/BRIEFING/OVERHEAD/SKY/SYSTEM) + 3 inserts (HAZARDS/NEARBY
+    # SIGNALS/RADAR) = 8 unique; 4 red pages lead.
     ok = (set(prom) == {"NOW", "HAZARDS", "NEARBY SIGNALS", "SYSTEM"}
           and all(p in prom for p in pages[:4])
-          and "RADAR" in pages and "SKY" in pages and len(pages) == len(set(pages)) == 10)
+          and "RADAR" in pages and "SKY" in pages and len(pages) == len(set(pages)) == 8)
     fails += 0 if ok else 1
-    print(f"  {'PASS' if ok else 'FAIL'}  everything at once: 4 promoted lead, 10 unique pages")
+    print(f"  {'PASS' if ok else 'FAIL'}  everything at once: 4 promoted lead, 8 unique pages")
     print(f"selftest: {'ALL PASS' if fails == 0 else f'{fails} FAILURES'}")
     return fails
 
@@ -2082,6 +2360,10 @@ def _mock_fixtures(data: dict) -> dict:
     tornado = dict(calm, cond="thunderstorm", alerts=[
         {"event": "Tornado Warning", "severity": "Extreme", "until": "19:45"}])
     aurora = dict(calm, kp_max=7.2, aurora="overhead")
+    emergency = dict(calm, emergency=[
+        {"event": "Civil Emergency Message", "areaDesc": "Denver County", "until": "22:00"}])
+    quake = dict(calm, quake={"mag": 4.8, "place": "12km WNW of Golden, CO",
+                              "dist_mi": 38, "ts": (time.time() - 900) * 1000})
 
     return {
         "calm":     {"sysinfo": ac,       "cond": calm,    "ok": True},
@@ -2090,6 +2372,8 @@ def _mock_fixtures(data: dict) -> dict:
         "battery":  {"sysinfo": on_batt,  "cond": calm,    "ok": True},
         "critical": {"sysinfo": critical, "cond": calm,    "ok": True},
         "aurora":   {"sysinfo": ac,       "cond": aurora,  "ok": True},
+        "emergency": {"sysinfo": ac,      "cond": emergency, "ok": True},
+        "quake":    {"sysinfo": ac,       "cond": quake,   "ok": True},
         "offline":  {"sysinfo": ac,       "cond": calm,    "ok": False},
         # same live frame, but with `near` forced so the RADAR page and the
         # carousel's insertion rule are exercisable on a dry day
