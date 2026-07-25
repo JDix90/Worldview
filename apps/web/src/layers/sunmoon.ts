@@ -47,7 +47,7 @@ function makeGlowMaterial(r: number, g: number, b: number): THREE.ShaderMaterial
 export const sunMoonLayer: LayerDef = {
   id: 'sunmoon',
   label: 'SUN & MOON',
-  defaultOn: true,
+  defaultOn: false, // opt-in (2026-07-24 review): moon phase already on HOME/Pi SKY; subsolar point is filler
   attribution: undefined,
   init(ctx: LayerCtx): LayerInstance {
     const sunMat = makeGlowMaterial(1.0, 0.85, 0.45);

@@ -59,7 +59,7 @@ const fragmentShader = /* glsl */ `
 export const auroraLayer: LayerDef = {
   id: 'aurora',
   label: 'AURORA',
-  defaultOn: true,
+  defaultOn: false, // opt-in (2026-07-24 review): "visible from Denver" verdict already on HOME/Pi SKY
   attribution: 'NOAA SWPC',
   init(ctx: LayerCtx): LayerInstance {
     const canvas = document.createElement('canvas');

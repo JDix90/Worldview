@@ -86,7 +86,7 @@ const fragmentShader = /* glsl */ `
 export const cloudsLayer: LayerDef = {
   id: 'clouds',
   label: 'CLOUDS',
-  defaultOn: true,
+  defaultOn: false, // opt-in (2026-07-24 review): 1-3 day-old mosaic, duplicates the phone
   attribution: 'NASA GIBS',
   init(ctx: LayerCtx): LayerInstance {
     const material = new THREE.ShaderMaterial({

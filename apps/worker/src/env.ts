@@ -29,9 +29,15 @@ export const env = {
   monthlySpendCapUsd: Number(process.env.ANALYST_MONTHLY_SPEND_CAP_USD ?? 10),
   /** Defaults retuned 2026-07-22 (DECISIONS #109): live spend was tracking
    *  ~$16/mo vs the §8 target of $2–4. Searches 10→4 and a 10/day S2 triage
-   *  budget bring the projection back inside the target. */
+   *  budget bring the projection back inside the target.
+   *  Retuned again 2026-07-24 (comprehensive review, owner target ~$5–6/mo):
+   *  the S2 triage budget drops 10→5. Pairs with holding immature D1 collapses
+   *  to S3 (d1Collapse.ts) so the 5 triage slots spend on genuine S2 (GPS /
+   *  clustered squawks), not diurnal noise. NOTE: the appliance .env currently
+   *  overrides ANALYST_WEB_SEARCHES_PER_DAY=10 — drop that toward 4 to land the
+   *  target; the $10 breaker + 70% alert remain the backstop. */
   webSearchesPerDay: Number(process.env.ANALYST_WEB_SEARCHES_PER_DAY ?? 4),
-  triagePerDay: Number(process.env.ANALYST_TRIAGE_PER_DAY ?? 10),
+  triagePerDay: Number(process.env.ANALYST_TRIAGE_PER_DAY ?? 5),
   briefingHourLocal: Number(process.env.BRIEFING_HOUR_LOCAL ?? 7),
   briefingTimezone: process.env.BRIEFING_TIMEZONE ?? 'America/Denver',
   /** Anomaly push. Ships false — the FOUNDATION §4 calibration gate. */
