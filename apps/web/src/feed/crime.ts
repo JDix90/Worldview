@@ -56,6 +56,50 @@ export function groupOf(category: string): CrimeGroup {
   return 'other';
 }
 
+// ── Retry (DECISIONS #141) ────────────────────────────────────────────────
+// Denver's crime query normally answers in ~4 s (cold or warm), but it
+// intermittently stalls: on 2026-11-07 one request hit the old 20 s timeout
+// and the immediate re-run returned 775 rows in 3.9 s. The layer fetches once
+// per home, so a single stall blanked CRIME until reload. Retry instead.
+export interface RetryOpts {
+  attempts: number;
+  timeoutMs: number;
+  /** Wait before retry n (n ≥ 1); the last value repeats. */
+  backoffMs: readonly number[];
+}
+const CRIME_RETRY: RetryOpts = { attempts: 3, timeoutMs: 15_000, backoffMs: [1_000, 3_000] };
+
+/** A failure no retry can fix (a 4xx other than 429: the query itself is bad). */
+class FatalFetchError extends Error {}
+
+/** GET JSON, retrying stalls, network errors, 429/5xx, unparseable bodies and
+ *  ArcGIS's HTTP-200 `{"error": …}` replies (which used to parse as "0
+ *  features", i.e. a silent CRIME 0). Throws the last error once attempts run
+ *  out. Worst case with CRIME_RETRY: 15+1+15+3+15 ≈ 49 s, then 'unavailable'. */
+export async function fetchJsonWithRetry<T>(url: string, label: string, opts: RetryOpts): Promise<T> {
+  let lastErr: unknown = new Error(`${label}: no attempts`);
+  for (let i = 0; i < opts.attempts; i++) {
+    if (i > 0) {
+      const wait = opts.backoffMs[Math.min(i - 1, opts.backoffMs.length - 1)] ?? 0;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(opts.timeoutMs) });
+      if (!res.ok) {
+        const msg = `${label}: HTTP ${res.status}`;
+        throw res.status === 429 || res.status >= 500 ? new Error(msg) : new FatalFetchError(msg);
+      }
+      const body = (await res.json()) as T | { error?: unknown } | null;
+      if (body && typeof body === 'object' && 'error' in body && body.error) throw new Error(`${label}: query error`);
+      return body as T;
+    } catch (e) {
+      if (e instanceof FatalFetchError) throw e;
+      lastErr = e;
+    }
+  }
+  throw lastErr;
+}
+
 // ── Denver ────────────────────────────────────────────────────────────────
 const DENVER_QUERY_URL =
   'https://services1.arcgis.com/zdB7qR0BtYrg0Xpl/arcgis/rest/services/ODC_CRIME_OFFENSES_P/FeatureServer/324/query';
@@ -96,9 +140,7 @@ const denverSource: CrimeSource = {
       resultRecordCount: '2000',
       f: 'geojson',
     });
-    const res = await fetch(`${DENVER_QUERY_URL}?${params}`, { signal: AbortSignal.timeout(20_000) });
-    if (!res.ok) throw new Error(`Denver crime query: HTTP ${res.status}`);
-    const data = (await res.json()) as ArcGisGeoJson;
+    const data = await fetchJsonWithRetry<ArcGisGeoJson>(`${DENVER_QUERY_URL}?${params}`, 'Denver crime query', CRIME_RETRY);
     const out: CrimeIncident[] = [];
     for (const f of data.features ?? []) {
       const coords = f.geometry?.coordinates;
