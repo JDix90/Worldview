@@ -50,6 +50,12 @@ const MIN_Z = 9;
 const MAX_Z = 17;
 /** OSM publishes to z19; never ask for a level that doesn't exist. */
 const MAX_TILE_Z = 19;
+/** OSM's tile policy requires a Referer from web pages. Since 2026-11 it
+ *  serves its "403 Access blocked" image (with HTTP 200) to referer-less
+ *  requests, so `no-referrer` blanked the whole basemap. `origin` sends
+ *  only scheme+host+port (e.g. http://10.0.0.177:8787/), never the path.
+ *  DECISIONS #140. */
+const OSM_REFERRER_POLICY = 'origin';
 /** Phones get stacked chrome and bigger targets. */
 const NARROW = 640;
 
@@ -391,7 +397,7 @@ export function CityMap({ city, defs, onClose }: Props) {
               width={t.size}
               height={t.size}
               alt=""
-              referrerPolicy="no-referrer"
+              referrerPolicy={OSM_REFERRER_POLICY}
               draggable={false}
               onError={(e) => {
                 (e.target as HTMLImageElement).style.display = 'none';
@@ -414,7 +420,7 @@ export function CityMap({ city, defs, onClose }: Props) {
               alt=""
               // NOT lazy: the padding ring exists to be ready before a drag
               // reveals it, and lazy loading would defer exactly those tiles.
-              referrerPolicy="no-referrer"
+              referrerPolicy={OSM_REFERRER_POLICY}
               draggable={false}
               onLoad={tileSettled}
               onError={(e) => {
