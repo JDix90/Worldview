@@ -5,6 +5,10 @@
  * earlier stale-looking sample was OBJECTID ordering, not a dead feed.
  * Default OFF — neighborhood texture, not ambient hazard. Client-direct
  * (same ArcGIS host as crime; CORS known-good).
+ *
+ * 2026-11-07: Denver retired layer 66 of this FeatureServer ("layerId: 66
+ * was not found"); the service now holds one table, id 53
+ * `service_requests_311`, same fields + query shape. Rows run 1–2 days behind.
  */
 import { toPx, onScreen, type CityLayerDef, type CityPick, type MercatorView } from '../registry';
 
@@ -24,10 +28,49 @@ interface Data311 {
 }
 
 const URL311 =
-  'https://services1.arcgis.com/zdB7qR0BtYrg0Xpl/arcgis/rest/services/ODC_service_requests_311/FeatureServer/66/query';
+  'https://services1.arcgis.com/zdB7qR0BtYrg0Xpl/arcgis/rest/services/ODC_service_requests_311/FeatureServer/53/query';
 const GREEN = '#8fd6a8';
 const CAP = 1500;
 const DAYS = 7;
+
+/* Case_Created_dttm is a Denver wall-clock string, "11/6/2026 2:05:17 AM"
+ * (zone confirmed from a week's hour histogram: peak 8 AM–4 PM, trough
+ * overnight). Case_Created_Date is date-only (local midnight stamped as UTC),
+ * so this string is the only time of day. Date.parse on this format is
+ * engine-defined and would read it in the *browser's* zone, so parse it
+ * explicitly as America/Denver — the dataset's zone, not the home's. */
+const DTTM = /^(\d{1,2})\/(\d{1,2})\/(\d{4}) (\d{1,2}):(\d{2}):(\d{2}) ([AP])M$/;
+const DENVER_PARTS = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/Denver',
+  hourCycle: 'h23',
+  year: 'numeric',
+  month: 'numeric',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: 'numeric',
+  second: 'numeric',
+});
+
+/** Denver's UTC offset in ms (−6h or −7h) at instant `ms` (whole seconds). */
+function denverOffsetMs(ms: number): number {
+  const p: Record<string, number> = {};
+  for (const x of DENVER_PARTS.formatToParts(ms)) if (x.type !== 'literal') p[x.type] = Number(x.value);
+  const n = (k: string) => p[k] ?? NaN;
+  const asUtc = Date.UTC(n('year'), n('month') - 1, n('day'), n('hour') % 24, n('minute'), n('second'));
+  return asUtc - ms;
+}
+
+/** "11/6/2026 2:05:17 AM" (Denver local) → epoch ms, or null if unrecognized. */
+export function parseDenverDttm(s: string): number | null {
+  const m = DTTM.exec(s.trim());
+  if (!m) return null;
+  const hour = (Number(m[4]) % 12) + (m[7] === 'P' ? 12 : 0);
+  const wall = Date.UTC(Number(m[3]), Number(m[1]) - 1, Number(m[2]), hour, Number(m[5]), Number(m[6]));
+  // Read the wall clock as UTC, then shift by Denver's offset; the second pass
+  // settles it when the first guess lands on the other side of a DST switch.
+  const t = wall - denverOffsetMs(wall - denverOffsetMs(wall));
+  return Number.isFinite(t) ? t : null;
+}
 
 async function fetch311(home: { lat: number; lon: number }): Promise<Data311> {
   const since = new Date(Date.now() - DAYS * 86_400_000).toISOString().slice(0, 10);
@@ -55,13 +98,12 @@ async function fetch311(home: { lat: number; lon: number }): Promise<Data311> {
     const a = f.attributes ?? {};
     const lat = Number(a.Latitude), lon = Number(a.Longitude);
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat === 0) continue;
-    const created = Date.parse(String(a.Case_Created_dttm ?? ''));
     rows.push({
       summary: String(a.Case_Summary ?? 'request'),
       status: a.Case_Status != null ? String(a.Case_Status) : null,
       agency: a.Agency != null ? String(a.Agency) : null,
       address: a.Incident_Address_1 != null ? String(a.Incident_Address_1) : null,
-      createdMs: Number.isFinite(created) ? created : null,
+      createdMs: parseDenverDttm(String(a.Case_Created_dttm ?? '')),
       lat,
       lon,
     });
