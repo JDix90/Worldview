@@ -43,6 +43,10 @@ const REREAD_DAYS = 10;
 const KEEP_DAYS = 420;
 const PAGE = 2000;
 const ARMED_KEY = (key: string) => `home:cluster:armed:${key}`;
+/** Data health for the note (DECISIONS #147): when the last fetch from Denver
+ *  succeeded (epoch ms), and the last failure ({at, error}) since then. */
+export const CRIME_OK_KEY = 'home:crime:lastOk';
+export const CRIME_ERR_KEY = 'home:crime:lastError';
 
 export interface Offense {
   id: string;
@@ -285,8 +289,18 @@ export async function jobHomeCrime(redis: Redis, db: Queryable): Promise<void> {
   const since = backfill
     ? addDays(today, -BACKFILL_DAYS)
     : addDays(localDay(new Date(rows[0].hi).getTime()), -REREAD_DAYS);
-  const offenses = await fetchOffenses(home, since);
+  let offenses: Offense[];
+  try {
+    offenses = await fetchOffenses(home, since);
+  } catch (err) {
+    // Recorded so the morning note can say the data is missing instead of
+    // reading as a quiet day (DECISIONS #147); BullMQ still logs the failure.
+    await redis.set(CRIME_ERR_KEY, JSON.stringify({ at: Date.now(), error: String(err).slice(0, 200) }));
+    throw err;
+  }
   await upsertOffenses(db, offenses);
+  await redis.set(CRIME_OK_KEY, String(Date.now()));
+  await redis.del(CRIME_ERR_KEY);
   await db.query(`DELETE FROM home_crime WHERE reported_at < now() - make_interval(days => $1)`, [KEEP_DAYS]);
   // The first run starts the news at the newest couple of days of data, so the
   // first note isn't a week's backlog (and isn't empty on a weekend).

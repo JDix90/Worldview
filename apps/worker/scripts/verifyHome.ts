@@ -12,7 +12,9 @@ import {
   assembleNoteInput,
   buildNotePrompt,
   categoryName,
+  crimeHealth,
   noteLead,
+  withHealthLine,
   offenseName,
   renderPlainNote,
   renderPlainRoundup,
@@ -144,6 +146,32 @@ check('constants: walking radius 1 mi, cluster ring ½ mi', WALK_RADIUS_MI === 1
   const text = renderPlainRoundup(r);
   check('roundup: counts carry their normal', text.includes('gunfire reports 3 (normal 1)') && text.includes('car thefts 8 (normal 3), unusually high'));
   check('roundup: says the city reports late', /reports late/.test(text));
+}
+
+// ── data health (DECISIONS #147): quiet must mean "nothing happened" ──────
+{
+  const H = 3600_000;
+  const now = Date.parse('2026-11-09T14:00:00Z'); // Monday 07:00 in Denver
+  const day = (iso: string) => Date.parse(`${iso}T18:00:00Z`);
+  const base = { nowMs: now, rows: 20_000, lastOkMs: now - 2 * H, lastErrorMs: null };
+  check('health: first boot, nothing collected, no error → wait (never)',
+    crimeHealth({ ...base, rows: 0, newestReportedMs: null, lastOkMs: null }).state === 'never');
+  const unreachable = crimeHealth({ ...base, rows: 0, newestReportedMs: null, lastOkMs: null, lastErrorMs: now - H });
+  check('health: nothing collected and a recorded failure → unavailable', unreachable.state === 'stale' && /unavailable/.test(unreachable.state === 'stale' ? unreachable.text : ''));
+  check('health: Monday with Thursday\'s reports newest → normal lag, fresh',
+    crimeHealth({ ...base, newestReportedMs: day('2026-11-05') }).state === 'fresh');
+  const upstream = crimeHealth({ ...base, newestReportedMs: day('2026-11-02') });
+  check('health: newest reports a week old → Denver not publishing',
+    upstream.state === 'stale' && upstream.reason === 'upstream' && /Denver's newest published reports are from Mon, Nov 2/.test(upstream.text),
+    upstream.state === 'stale' ? upstream.text : '');
+  const collector = crimeHealth({ ...base, newestReportedMs: day('2026-11-06'), lastOkMs: now - 13 * H });
+  check('health: no successful fetch in 13 h → collector stale, checked before upstream',
+    collector.state === 'stale' && collector.reason === 'collector');
+  check('health: unknown last success (Redis reset) → judged on the data alone',
+    crimeHealth({ ...base, newestReportedMs: day('2026-11-06'), lastOkMs: null }).state === 'fresh');
+  const lined = withHealthLine('Lead line.\n- item one', upstream);
+  check('health: the line goes right after the lead', lined.split('\n')[1] === (upstream.state === 'stale' ? upstream.text : ''));
+  check('health: fresh data leaves the body alone', withHealthLine('Lead.\n- x', { state: 'fresh' }) === 'Lead.\n- x');
 }
 
 // ── cost ledger: new models price as themselves ───────────────────────────

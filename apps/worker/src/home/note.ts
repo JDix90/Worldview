@@ -21,7 +21,7 @@ import { log, logError } from '../log.js';
 import { AnalystClient } from '../analyst/client.js';
 import { pushHome } from '../analyst/notify.js';
 import { resolveHomeAnchor } from './anchor.js';
-import { crimeSeries, CLUSTER_RADIUS_MI, WALK_RADIUS_MI } from './crime.js';
+import { crimeSeries, CLUSTER_RADIUS_MI, CRIME_ERR_KEY, CRIME_OK_KEY, WALK_RADIUS_MI } from './crime.js';
 import { clusterLevels, localDay, trailing7 } from './crimeRules.js';
 
 const TZ = 'America/Denver';
@@ -298,6 +298,86 @@ export function buildRoundupPrompt(r: RoundupInput): string {
   return `Write this week's roundup. Distances are miles from home; "dir" is the direction from home.\n\n\`\`\`json\n${JSON.stringify(r, null, 2)}\n\`\`\``;
 }
 
+// ── data health (DECISIONS #147) ─────────────────────────────────────────
+// FOUNDATION §2's data-health rule, applied to home: a quiet note must mean
+// "nothing happened", never "nothing arrived".
+
+/** The collector runs every 3 h; four missed runs is a broken collector. */
+export const COLLECTOR_STALE_MS = 12 * 3600_000;
+/** Denver publishes Mon–Fri a day or two late, so Monday's newest report is
+ *  often Thursday's (4 days). Older than this is no longer normal lag. */
+export const UPSTREAM_STALE_DAYS = 5;
+const HEALTH_LATCH = 'home:health:notified';
+
+export type CrimeHealth =
+  | { state: 'never' }
+  | { state: 'fresh' }
+  | { state: 'stale'; reason: 'collector' | 'upstream'; since: string; text: string };
+
+export function crimeHealth(o: {
+  nowMs: number;
+  rows: number;
+  newestReportedMs: number | null;
+  lastOkMs: number | null;
+  lastErrorMs: number | null;
+}): CrimeHealth {
+  if (o.rows === 0 || o.newestReportedMs === null) {
+    // Nothing collected yet. A recorded failure means Denver can't be
+    // reached; otherwise the first run simply hasn't finished, so wait.
+    return o.lastErrorMs === null
+      ? { state: 'never' }
+      : { state: 'stale', reason: 'collector', since: 'never',
+          text: "Crime data is unavailable: orrery hasn't been able to load Denver's crime data yet." };
+  }
+  if (o.lastOkMs !== null && o.nowMs - o.lastOkMs > COLLECTOR_STALE_MS) {
+    return { state: 'stale', reason: 'collector', since: String(o.lastOkMs),
+      text: `Crime data is out of date: orrery hasn't reached Denver's crime data since ${whenText(o.lastOkMs)}.` };
+  }
+  const newest = localDay(o.newestReportedMs);
+  const ageDays = (Date.parse(`${localDay(o.nowMs)}T12:00:00Z`) - Date.parse(`${newest}T12:00:00Z`)) / 86_400_000;
+  if (ageDays > UPSTREAM_STALE_DAYS) {
+    return { state: 'stale', reason: 'upstream', since: newest,
+      text: `Crime data is out of date: Denver's newest published reports are from ${dayText(newest)}.` };
+  }
+  return { state: 'fresh' };
+}
+
+export async function loadCrimeHealth(db: Queryable, redis: Pick<Redis, 'get'>): Promise<CrimeHealth> {
+  const { rows } = await db.query(`SELECT count(*)::int AS n, max(reported_at) AS hi FROM home_crime`);
+  const ok = Number(await redis.get(CRIME_OK_KEY));
+  let errAt: number | null = null;
+  try {
+    const raw = await redis.get(CRIME_ERR_KEY);
+    if (raw) errAt = Number((JSON.parse(raw) as { at?: unknown }).at) || null;
+  } catch {
+    /* unreadable error record: treat as none */
+  }
+  return crimeHealth({
+    nowMs: Date.now(),
+    rows: Number(rows[0]?.n ?? 0),
+    newestReportedMs: rows[0]?.hi ? new Date(rows[0].hi).getTime() : null,
+    lastOkMs: Number.isFinite(ok) && ok > 0 ? ok : null,
+    lastErrorMs: errAt,
+  });
+}
+
+/** True the first time a given outage is announced; later notes in the same
+ *  outage still say it, but don't push for it alone. */
+async function firstNotice(redis: Pick<Redis, 'get' | 'set'>, h: Extract<CrimeHealth, { state: 'stale' }>): Promise<boolean> {
+  const key = `${h.reason}:${h.since}`;
+  if ((await redis.get(HEALTH_LATCH)) === key) return false;
+  await redis.set(HEALTH_LATCH, key);
+  return true;
+}
+
+/** The health line goes right after the lead, so it shows in the push body.
+ *  Added in code, never by the model, so it can't be reworded or dropped. */
+export function withHealthLine(body: string, h: CrimeHealth): string {
+  if (h.state !== 'stale') return body;
+  const [lead, ...rest] = body.split('\n');
+  return [lead, h.text, ...rest].join('\n');
+}
+
 // ── writing and filing ────────────────────────────────────────────────────
 /** Strip markdown the phone would show literally, and cap the length. */
 export function tidy(text: string): string {
@@ -368,7 +448,7 @@ async function file(
   dateLocal: string,
   kind: 'note' | 'roundup',
   body: string,
-  opts: { quiet: boolean; items: number; model: string | null; eventIds: string[]; title: string },
+  opts: { quiet: boolean; items: number; model: string | null; eventIds: string[]; title: string; push?: boolean },
 ): Promise<FiledNote | null> {
   const ins = await db.query(
     `INSERT INTO home_note (id, date_local, kind, ts, body, quiet, items, model)
@@ -381,7 +461,7 @@ async function file(
     await db.query(`UPDATE home_event SET noted_at = now() WHERE id = ANY($1::text[])`, [opts.eventIds]);
   }
   let pushed = false;
-  if (!opts.quiet) {
+  if (!opts.quiet && opts.push !== false) {
     const [first, ...rest] = body.split('\n');
     pushed = await pushHome(opts.title.replace('%s', (first ?? '').slice(0, 100)), rest.join('\n').trim() || first || body);
     if (pushed) await db.query(`UPDATE home_note SET pushed = true WHERE id = $1`, [ins.rows[0].id]);
@@ -390,14 +470,26 @@ async function file(
   return { kind, body, quiet: opts.quiet, model: opts.model, pushed };
 }
 
-export async function fileNote(db: Queryable, client: AnalystClient, dateLocal: string, events: EventRow[]): Promise<FiledNote | null> {
+export async function fileNote(
+  db: Queryable,
+  redis: Pick<Redis, 'get' | 'set'>,
+  client: AnalystClient,
+  dateLocal: string,
+  events: EventRow[],
+  health: CrimeHealth = { state: 'fresh' },
+): Promise<FiledNote | null> {
   const input = assembleNoteInput(events);
   const n = input.items.length + input.clusters.length;
+  if (n === 0 && health.state === 'stale') {
+    // Not a quiet day: the data didn't arrive. Say so; push once per outage.
+    const push = await firstNotice(redis, health);
+    return file(db, dateLocal, 'note', health.text, { quiet: false, items: 0, model: null, eventIds: [], title: 'Near home: %s', push });
+  }
   if (n === 0) {
     return file(db, dateLocal, 'note', 'Nothing of note near home.', { quiet: true, items: 0, model: null, eventIds: [], title: '' });
   }
   const written = await compose(client, 'home_note', env.homeNoteModel, 'low', NOTE_SYSTEM, buildNotePrompt(input));
-  const body = tidy(written ?? renderPlainNote(input));
+  const body = withHealthLine(tidy(written ?? renderPlainNote(input)), health);
   return file(db, dateLocal, 'note', body, {
     quiet: false, items: n, model: written ? env.homeNoteModel : null, eventIds: input.eventIds, title: 'Near home: %s',
   });
@@ -405,16 +497,17 @@ export async function fileNote(db: Queryable, client: AnalystClient, dateLocal: 
 
 export async function fileRoundup(
   db: Queryable,
-  redis: Pick<Redis, 'get'>,
+  redis: Pick<Redis, 'get' | 'set'>,
   client: AnalystClient,
   dateLocal: string,
   events: EventRow[],
+  health: CrimeHealth = { state: 'fresh' },
 ): Promise<FiledNote | null> {
   const fresh = assembleNoteInput(events);
   const input = await assembleRoundupInput(db, redis, fresh);
-  if (!input) return fileNote(db, client, dateLocal, events); // no crime history yet
+  if (!input) return fileNote(db, redis, client, dateLocal, events, health); // no crime history yet
   const written = await compose(client, 'home_roundup', env.homeRoundupModel, 'medium', ROUNDUP_SYSTEM, buildRoundupPrompt(input));
-  const body = tidy(written ?? renderPlainRoundup(input));
+  const body = withHealthLine(tidy(written ?? renderPlainRoundup(input)), health);
   return file(db, dateLocal, 'roundup', body, {
     quiet: false,
     items: fresh.items.length + fresh.clusters.length,
@@ -435,8 +528,17 @@ export async function jobHomeNoteCheck(redis: Redis, db: Queryable): Promise<voi
   const kind = monday ? 'roundup' : 'note';
   const done = await db.query(`SELECT 1 FROM home_note WHERE date_local = $1 AND kind = $2`, [dateLocal, kind]);
   if (done.rows.length) return;
+  const health = await loadCrimeHealth(db, redis);
+  if (health.state === 'never') {
+    // First boot: the backfill hasn't finished. Filing now would record a
+    // "quiet" day that is really "no data yet" (DECISIONS #147); check again
+    // in 15 minutes.
+    log('home', 'note waits: crime data not collected yet');
+    return;
+  }
+  if (health.state === 'fresh') await redis.del(HEALTH_LATCH); // outage over: the next one gets announced
   const { rows } = await db.query(`SELECT id, rule, payload FROM home_event WHERE noted_at IS NULL ORDER BY ts`);
   const client = new AnalystClient(db);
-  if (monday) await fileRoundup(db, redis, client, dateLocal, rows as EventRow[]);
-  else await fileNote(db, client, dateLocal, rows as EventRow[]);
+  if (monday) await fileRoundup(db, redis, client, dateLocal, rows as EventRow[], health);
+  else await fileNote(db, redis, client, dateLocal, rows as EventRow[], health);
 }
