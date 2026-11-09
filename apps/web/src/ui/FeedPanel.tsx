@@ -27,6 +27,18 @@ interface Briefing {
   body_md: string;
   quiet: boolean;
 }
+/** Home note or Monday roundup (FOUNDATION §12). model null = written by code. */
+interface HomeNote {
+  id: string;
+  date_local: string;
+  kind: 'note' | 'roundup';
+  ts: string;
+  body: string;
+  quiet: boolean;
+  items: number;
+  model: string | null;
+  pushed: boolean;
+}
 
 const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 const SEV_COLOR: Record<Severity, string> = {
@@ -118,7 +130,9 @@ interface FeedPanelProps {
 }
 
 export function FeedPanel({ open, onOpenChange, chipVisible, bottom }: FeedPanelProps) {
-  const [tab, setTab] = useState<'signals' | 'briefing' | 'journal'>('signals');
+  // HOME leads: the analyst's subject is home now (FOUNDATION §1 amendment).
+  const [tab, setTab] = useState<'home' | 'signals' | 'briefing' | 'journal'>('home');
+  const [homeNotes, setHomeNotes] = useState<HomeNote[] | null>(null);
   const [gateOpen, setGateOpen] = useState(false);
   const [signals, setSignals] = useState<FeedSignal[]>([]);
   const [briefing, setBriefing] = useState<Briefing | null>(null);
@@ -135,6 +149,9 @@ export function FeedPanel({ open, onOpenChange, chipVisible, bottom }: FeedPanel
       apiGet<{ briefings: Briefing[] }>('/api/briefings?limit=1')
         .then((d) => alive && setBriefing(d.briefings[0] ?? null))
         .catch(() => undefined);
+      apiGet<{ notes: HomeNote[] }>('/api/home/notes?limit=7')
+        .then((d) => alive && setHomeNotes(d.notes))
+        .catch(() => alive && setHomeNotes((prev) => prev ?? []));
       if (DEBUG_UI) {
         apiGet<{ monthToDate: { mtd_usd: number } }>('/api/analyst/usage')
           .then((d) => alive && setCost(d.monthToDate))
@@ -190,7 +207,7 @@ export function FeedPanel({ open, onOpenChange, chipVisible, bottom }: FeedPanel
   return (
     <div style={panel}>
       <div style={{ display: 'flex', gap: 14, marginBottom: 10, alignItems: 'baseline' }}>
-        {(['signals', 'briefing', 'journal'] as const).map((t) => (
+        {(['home', 'signals', 'briefing', 'journal'] as const).map((t) => (
           <span
             key={t}
             className="orx-x"
@@ -266,6 +283,28 @@ export function FeedPanel({ open, onOpenChange, chipVisible, bottom }: FeedPanel
       )}
 
       {tab === 'journal' && <Journal />}
+
+      {tab === 'home' && (
+        <div>
+          {homeNotes === null && <div style={{ opacity: 0.5 }}>Loading…</div>}
+          {homeNotes?.length === 0 && (
+            <div style={{ opacity: 0.5 }}>
+              No home note yet. The first one files at the next morning check after the worker has collected crime
+              near home.
+            </div>
+          )}
+          {homeNotes?.map((n) => (
+            <div key={n.id} style={{ marginBottom: 14, opacity: n.quiet ? 0.55 : 1 }}>
+              <div style={{ opacity: 0.55, marginBottom: 4 }}>
+                {n.date_local} · {n.kind === 'roundup' ? 'weekly roundup' : n.quiet ? 'quiet' : `${n.items} item${n.items === 1 ? '' : 's'}`}
+                {n.model === null && !n.quiet && ' · plain'}
+                {n.pushed && ' · sent to phone'}
+              </div>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{n.body}</div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {tab === 'briefing' && (
         <div>

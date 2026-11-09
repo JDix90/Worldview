@@ -10,7 +10,9 @@
     "verify:detectors": "tsx scripts/verifyDetectors.ts",
     "verify:analyst": "tsx scripts/verifyAnalyst.ts",
     "verify:live": "tsx scripts/liveAnalystCheck.ts",
-    "verify:replay": "tsx scripts/replayDetectors.ts"
+    "verify:replay": "tsx scripts/replayDetectors.ts",
+    "backtest:home": "tsx scripts/backtestHomeBriefing.ts",
+    "verify:home": "tsx scripts/verifyHome.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

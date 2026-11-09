@@ -1,12 +1,14 @@
 # ORRERY — Foundation
 
-**Status: canonical.** This document is the source of truth. Architectural decisions recorded here are not re-litigated without explicitly amending this file (and logging the amendment in [DECISIONS.md](DECISIONS.md)). Last amended: 2026-07-13.
+**Status: canonical.** This document is the source of truth. Architectural decisions recorded here are not re-litigated without explicitly amending this file (and logging the amendment in [DECISIONS.md](DECISIONS.md)). Last amended: 2026-11-08 (the home amendment: §1, §5, §8, §11, §12).
 
 ---
 
 ## 1. What this is
 
 A personal instrument: a 3D globe rendering live world conditions from public data feeds, watched by an AI analyst that reports anomalies in plain language. Built for one person, maybe a handful of friends.
+
+**Amendment 2026-11-08 — the analyst comes home (DECISIONS #142, §12).** The owner switched the daily flights briefing off: world flights weren't relevant to them, never varied enough to matter, and cost money doing it. The four-stage design stays and its subject moves. The analyst now watches the owner's own surroundings (crime, weather, the house itself, later traffic) and judges them against the home's own normal. The globe and the flights pipeline stay as they are.
 
 **Goals**
 - Signal quality over coverage. One trustworthy detector beats five noisy ones.
@@ -111,6 +113,8 @@ Build the seams for more collectors (the `SourceAdapter` interface, the `source`
 
 **Amendment 2026-07-16 — Phase 1.5b furniture (DECISIONS #55–59).** Six more furniture layers, same rule: tropical cyclones (NHC, server-proxied — no CORS), wildfires (NASA FIRMS, key-gated), launches (Launch Library 2), sun & moon (pure ephemeris), aerosol/smoke (NASA GIBS AOD texture), and wind particles (GFS/ECMWF, pending a GRIB2 spike since NOAA retired OPeNDAP). Sources without CORS get a thin bearer-authed server proxy with stale-serve caching; none touch Stages 2–4. Gate unchanged.
 
+**Amendment 2026-11-08 — home sources enter the pipeline (DECISIONS #142).** The flights-only boundary above no longer holds for data about the owner's home. Under §12, crime, weather (alerts, air quality) and the house's own health (power, internet) become verticals through Stages 1–4. Traffic follows, then 311 and indoor sensors, each by owner decision. World-scale layers stay furniture.
+
 ---
 
 ## 6. Signal schema
@@ -181,6 +185,8 @@ The analyst's structured output is an `Assessment`: `{ signal_id, disposition: '
 
 **Cost controls (in code, not intentions):** ≤ 10 web searches/day, spent only on S1/S2 — never digest filler. Monthly token-spend circuit breaker; on trip, degrade to "briefing unavailable — spend cap," never a surprise invoice. Target: pennies per day (realistically $2–4/month).
 
+**Amendment 2026-11-08 (DECISIONS #142, #143).** The 07:00 flights briefing is retired; it is already off on the appliance (`BRIEFING_HOUR_LOCAL=25`). In its place come the **home note**, filed on mornings when a home detector fired, and the **weekly roundup** on Monday mornings (§12). Flight-signal triage was ~80% of analyst spend in Aug–Sep 2026 (about $6.50/month against about $1.55 for the briefing). It now runs only for signals within 100 mi of home (`ANALYST_TRIAGE_RADIUS_MI`), S1 included, by owner decision (DECISIONS #144). Signals farther away are still detected and stored, without an LLM call. Home cost rule: code decides whether there is anything to say and the model is called only to write it, so a quiet day costs $0.
+
 **Honesty rule:** the analyst names only sources it actually consulted. It has web search; it does **not** have NOTAM access in Phase 1 and must never claim a NOTAM check. "No public reporting found" is what web search truthfully supports. Real NOTAM integration is a named Phase 2+ item.
 
 ---
@@ -229,3 +235,38 @@ After Phase 1 ships, the owner lives with it for 14 days. Then:
 3. Was the shadow-mode S1 log something worth having been interrupted for?
 
 Any "no" → ORRERY stops at one layer or stops entirely. Nothing in the codebase may presume this gate is passed.
+
+**Amendment 2026-11-08 — the owner's answer to Q1 (DECISIONS #142).** The owner, on the flights briefing: *"it was only about world flights which wasn't really relevant or helpful to me, especially since it was costing money. There was never enough variance or change to really matter or be interesting."* That answers Q1 "no" for the flights analyst. Under the rule above, flights stop at one layer: the globe, collectors, detectors and feed keep running as they are, and nothing new is built on the flights vertical. The home analyst has its own gate (§12).
+
+---
+
+## 12. Home briefing (amendment 2026-11-08, DECISIONS #142–144)
+
+The analyst's subject is the owner's home: what changed around it, measured against its own normal. The four stages apply unchanged. Home sources get collectors, baselines and deterministic detectors, and the LLM only writes. Home detectors emit their own small structured events rather than the flights `Signal` shape (§6). The rule that the model sees only those events still holds.
+
+**Rules.** These are what keep it from going the way of the flights briefing.
+1. **Change, not totals.** "8 car thefts within ½ mi this week; normal is 3" is a finding. "35 crimes within a mile yesterday" is not, because around this home that is every day.
+2. **Near beats big.** Distances are measured from home. The wider metro area counts only for events that reach home, such as warnings and air quality.
+3. **Quiet costs nothing.** Code decides whether there is anything to say, and the model is called only when a detector fired. A quiet morning sends no message.
+4. **Single incidents: what the owner walks through.** The owner walks within about a mile of home. So every gunfire offense within 1 mi gets its own line, shots fired with no one hit included, and so does every serious violent offense (murder, robbery, aggravated assault, sexual assault) (owner decision, DECISIONS #144). Everything else rolls into counts against normal.
+
+**Cadence (DECISIONS #143–144).** With the owner's rules, the 90-day backtest has something to say on 87 of 90 days, about three items a day, so the home note is in practice daily. Crime arrives when Denver publishes it (weekdays, a day or two late), so each note carries whatever is newly published. Monday's note carries the weekend, and weekend notes are mostly weather.
+- **Home note:** 07:00 when a detector fired since the last note. Gunfire comes first, then other violent crimes nearest first, then clusters and weather. Written by a small model.
+- **Weekly roundup:** Monday 07:00. It covers the week against normal, including things that stayed under a threshold. Written by the larger model in the §9 voice.
+- Both appear on the panel's BRIEFING page, in the web feed and through Ossawatomix. They go to the phone by ntfy **from day one** at default priority (3), so the phone's own sound and silent settings decide how a note arrives, never louder than other notifications (owner decision, DECISIONS #144, which replaces the shadow period first proposed).
+
+**Sources, in build order.**
+1. **Crime** (Denver Open Data), collected server-side. Baselines backfill from the city's archive, which holds years of history, so there is no warm-up.
+2. **Weather and air.** NWS warnings and advisories (fog advisories excluded), season firsts (first freeze, first snow), extremes and air quality. The thresholds are in DECISIONS #143.
+3. **The house.** Power events from the UPS, and internet outages, detected when every upstream fails at once.
+4. **Traffic** (COtrip). Areas: Denver city limits, I-25 from Fort Collins to Colorado Springs, and I-70 from Denver to Vail (owner, DECISIONS #144). Feeds: incidents, planned closures, chain and traction-law conditions, and corridor travel times. There is no archive, so collection starts early. Detectors follow once about four weeks of history exist, and a travel-time "normal" is kept per weekday and hour.
+5. **311 and indoor sensors**, later, each by owner decision.
+
+**Privacy.** The home point is personal data. The owner's precise point (`HOME_LAT`/`HOME_LON`) lives only in the appliance's `.env`. It never appears in the repo, in a prompt as coordinates, or in an upstream query. Crime is queried as a box around the point rounded to 0.01°, and weather, alerts and air quality get it rounded to 0.1°. Distances are computed on the appliance. The model does see distances and the city's block-level addresses, which together place home roughly. That is accepted for now and belongs to the privacy work already on the list.
+
+**The home gate.** It takes the place of §11 for this vertical. After 30 days of home notes:
+1. Did a note tell the owner something useful they wouldn't otherwise have known?
+2. In a quiet week, did the roundup still earn a read?
+3. Is the cost under $1/month?
+
+Any "no" means retune it or turn it off, with the verdict recorded in DECISIONS.

@@ -17,12 +17,17 @@ import { log } from '../log.js';
 const PRICES: Record<string, { in: number; out: number }> = {
   'claude-haiku-4-5': { in: 1, out: 5 },
   'claude-sonnet-5': { in: 3, out: 15 },
+  // home note / roundup models (DECISIONS #146; Anthropic price table, 2026-10)
+  'claude-haiku-5-5': { in: 0.1, out: 0.5 },
+  'claude-sonnet-5-5': { in: 2, out: 10 },
 };
 const FALLBACK_PRICE = { in: 3, out: 15 };
 const WEB_SEARCH_USD_PER_CALL = 0.01;
 
 export interface AnalystCallResult {
   content: Anthropic.ContentBlock[];
+  /** 'refusal' means a safety classifier declined: content is not an answer. */
+  stopReason: Anthropic.Message['stop_reason'];
   inputTokens: number;
   outputTokens: number;
   webSearches: number;
@@ -32,7 +37,10 @@ export interface AnalystCallResult {
 export type Transport = (params: Anthropic.MessageCreateParamsNonStreaming) => Promise<Anthropic.Message>;
 
 export function priceOf(model: string): { in: number; out: number } {
-  const key = Object.keys(PRICES).find((k) => model.startsWith(k));
+  // longest matching prefix: 'claude-sonnet-5-5' must not price as 'claude-sonnet-5'
+  const key = Object.keys(PRICES)
+    .filter((k) => model.startsWith(k))
+    .sort((a, b) => b.length - a.length)[0];
   return key ? PRICES[key]! : FALLBACK_PRICE;
 }
 
@@ -89,7 +97,7 @@ export class AnalystClient {
   }
 
   async call(
-    kind: 'triage' | 'briefing',
+    kind: 'triage' | 'briefing' | 'home_note' | 'home_roundup',
     params: Anthropic.MessageCreateParamsNonStreaming,
   ): Promise<AnalystCallResult> {
     const msg = await this.transport(params);
@@ -109,6 +117,6 @@ export class AnalystClient {
       webSearches,
       estCostUsd: Number(estCostUsd.toFixed(4)),
     });
-    return { content: msg.content, inputTokens, outputTokens, webSearches, estCostUsd };
+    return { content: msg.content, stopReason: msg.stop_reason, inputTokens, outputTokens, webSearches, estCostUsd };
   }
 }

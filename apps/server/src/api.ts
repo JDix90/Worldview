@@ -68,6 +68,21 @@ function extractBriefing(b: { date_local: string; body_md: string; quiet: boolea
   return { date: b.date_local, quiet: b.quiet, lead, changed, signoff };
 }
 
+/** The home note in the briefing snippet's shape: the first line is the lead,
+ *  the rest is the digest (joined, since the panel wraps one string). */
+function homeNoteSnippet(n: { date_local: string; kind: string; body: string; quiet: boolean }) {
+  const [first, ...rest] = n.body.split('\n').map((l) => l.replace(/^-\s*/, '').trim()).filter(Boolean);
+  return {
+    date: n.date_local,
+    quiet: n.quiet,
+    lead: sentenceTrim(first ?? '', 240),
+    changed: rest.length ? sentenceTrim(rest.join(' · '), 900) : null,
+    signoff: null,
+    source: 'home' as const,
+    kind: n.kind,
+  };
+}
+
 interface BaselineRow {
   cell: string;
   hour: number;
@@ -138,6 +153,30 @@ export function registerApi(
       return { briefings: rows };
     });
 
+    // ── home briefing (FOUNDATION §12): notes for the web FEED and Ossawatomix ──
+    scope.get<{ Querystring: { limit?: string } }>('/api/home/notes', async (req) => {
+      const limit = Math.min(Number(req.query.limit ?? 7) || 7, 60);
+      const { rows } = await pool
+        .query(
+          `SELECT id, date_local::text AS date_local, kind, ts, body, quiet, items, model, pushed
+           FROM home_note ORDER BY date_local DESC, ts DESC LIMIT $1`,
+          [limit],
+        )
+        .catch(() => ({ rows: [] }));
+      return { notes: rows };
+    });
+
+    /** The newest note, for a voice lookup ("anything new around the house?"). */
+    scope.get('/api/home/note/latest', async () => {
+      const { rows } = await pool
+        .query(
+          `SELECT date_local::text AS date_local, kind, ts, body, quiet
+           FROM home_note ORDER BY date_local DESC, ts DESC LIMIT 1`,
+        )
+        .catch(() => ({ rows: [] }));
+      return { note: rows[0] ?? null };
+    });
+
     scope.get('/api/shadow-log', async () => {
       const { rows } = await pool.query(
         `SELECT id, ts, signal, assessment, would_send, pushed
@@ -193,6 +232,21 @@ export function registerApi(
     scope.get('/api/pager/summary', async () => {
       const nowMs = Date.now();
       const home = await resolveHome();
+      // Home note + the last day's home events (FOUNDATION §12). The worker
+      // owns those tables; until it has created them, these read as empty.
+      const none = { rows: [] as Array<Record<string, unknown>> };
+      const [homeNote, homeEvents] = await Promise.all([
+        pool
+          .query(`SELECT date_local::text AS date_local, kind, body, quiet FROM home_note ORDER BY date_local DESC, ts DESC LIMIT 1`)
+          .catch(() => none),
+        pool
+          .query(
+            `SELECT rule, ts, (payload->>'distMi')::float8 AS "distMi" FROM home_event
+             WHERE ts >= now() - interval '24 hours' AND rule IN ('crime.gunfire', 'crime.violent', 'crime.cluster')
+             ORDER BY ts DESC LIMIT 50`,
+          )
+          .catch(() => none),
+      ]);
       const [signals, briefing, shadow24h] = await Promise.all([
         pool.query(
           `SELECT s.severity, s.ts, s.payload->>'what' AS what,
@@ -227,7 +281,16 @@ export function registerApi(
       );
 
       const b = briefing.rows[0] as { date_local: string; body_md: string; quiet: boolean } | undefined;
-      const briefingSnippet = b ? extractBriefing(b) : null;
+      const hn = homeNote.rows[0] as { date_local: string; kind: string; body: string; quiet: boolean } | undefined;
+      // The panel's BRIEFING page shows the home note once there is one (the
+      // flights briefing is retired, FOUNDATION §8 amendment); same shape, so
+      // older panels render it unchanged, plus `source` for the label.
+      const briefingSnippet =
+        hn && (!b || hn.date_local >= String(b.date_local).slice(0, 10))
+          ? homeNoteSnippet(hn)
+          : b
+            ? extractBriefing(b)
+            : null;
 
       // Signal context: place words, distance from home, live-aircraft state,
       // route (cached adsbdb; squawk signals only — ≤5 lookups per request,
@@ -309,6 +372,9 @@ export function registerApi(
         },
         signals: enrichedSignals,
         briefing: briefingSnippet,
+        // Detector events near home in the last 24 h: the panel's CRIME insert
+        // fires on these instead of its own any-violent-within-1-mi query (#143 e).
+        homeEvents24h: homeEvents.rows,
         integrity,
         integrityAllNominal: integrity.every((r) => r.verdict === 'nominal' || r.verdict === 'no-data'),
         overhead: { count: overheadCount, milCount, tops: tops.slice(0, 4) },

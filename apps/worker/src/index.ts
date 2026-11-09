@@ -19,6 +19,8 @@ import { jobRollupDensity, jobCleanRollups } from './rollup/density.js';
 import { jobComputeBaselines } from './rollup/baselines.js';
 import { jobDetect } from './detect/jobDetect.js';
 import { jobAnalystPoll, jobBriefingCheck, jobOpsWatch } from './analyst/jobs.js';
+import { jobHomeCrime } from './home/crime.js';
+import { jobHomeNoteCheck } from './home/note.js';
 
 const COLLECTOR_QUEUE = 'collector';
 
@@ -42,6 +44,12 @@ const SCHEDULES: Record<string, number> = {
   // DECISIONS #93). Interval + guard also gives catch-up semantics: an
   // appliance that was off at 07:00 files late instead of never.
   'briefing-check': 15 * 60_000,
+  // Home briefing, crime (FOUNDATION §12). Denver publishes Mon–Fri in
+  // batches; every 3 h catches a batch within hours without hammering ArcGIS.
+  'home-crime': 3 * 3600_000,
+  // Home note / Monday roundup: same interval-plus-guard pattern as the
+  // briefing (#93), so a late boot files late instead of never.
+  'home-note-check': 15 * 60_000,
 };
 
 async function main(): Promise<void> {
@@ -96,6 +104,10 @@ async function main(): Promise<void> {
           return jobBriefingCheck(pool);
         case 'ops-watch':
           return jobOpsWatch(dataRedis, pool);
+        case 'home-crime':
+          return jobHomeCrime(dataRedis, pool);
+        case 'home-note-check':
+          return jobHomeNoteCheck(dataRedis, pool);
         default:
           throw new Error(`unknown job: ${job.name}`);
       }

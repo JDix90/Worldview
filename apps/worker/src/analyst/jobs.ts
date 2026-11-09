@@ -15,6 +15,7 @@ import { buildTriagePrompt, parseAssessment, webSearchTool, TRIAGE_SYSTEM } from
 import { generateBriefing } from './briefing.js';
 import { decideTriage, TRIAGE_COOLDOWN_S } from './triagePolicy.js';
 import { pushAnomaly, pushOps } from './notify.js';
+import { distMi, resolveHomeAnchor } from '../home/anchor.js';
 
 const CURSOR_KEY = 'analyst:stream:cursor';
 const SEARCH_BUDGET_KEY = (day: string) => `analyst:websearch:${day}`;
@@ -99,11 +100,15 @@ export async function jobAnalystPoll(redis: Redis, db: Queryable): Promise<void>
           } else {
             // Deterministic gate (DECISIONS #109): S1 always; S2 only within
             // the daily budget and once per condition per cooldown window.
+            // Area gate (DECISIONS #144): only signals near home get an LLM call.
             const day = new Date().toISOString().slice(0, 10);
+            const home = await resolveHomeAnchor(redis);
             const decision = decideTriage(signal, {
               usedToday: Number((await redis.get(TRIAGE_BUDGET_KEY(day))) ?? 0),
               dailyCap: env.triagePerDay,
               onCooldown: (await redis.exists(TRIAGE_COOLDOWN_KEY(signal.dedupe_key))) === 1,
+              distanceMi: distMi(home.lat, home.lon, signal.where.lat, signal.where.lon),
+              radiusMi: env.triageRadiusMi,
             });
             if (!decision.triage) {
               log('analyst', `triage skipped (${decision.reason})`, { signal: signal.id, severity: signal.severity });

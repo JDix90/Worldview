@@ -130,6 +130,20 @@ check('triage: S2 condition on cooldown → skipped',
 check('triage: S3 never triaged',
   decideTriage(sigS3, { usedToday: 0, dailyCap: 10, onCooldown: false }).reason === 'not_triageable');
 
+// ── Triage area gate (DECISIONS #144: Denver-area flight checks only) ──
+check('area: far S1 is not triaged',
+  decideTriage(sigS1, { usedToday: 0, dailyCap: 10, onCooldown: false, distanceMi: 5000, radiusMi: 100 }).reason === 'out_of_area');
+check('area: far S2 is not triaged',
+  decideTriage(sigS2, { usedToday: 0, dailyCap: 10, onCooldown: false, distanceMi: 101, radiusMi: 100 }).reason === 'out_of_area');
+check('area: S1 near home still always goes',
+  decideTriage(sigS1, { usedToday: 99, dailyCap: 10, onCooldown: true, distanceMi: 20, radiusMi: 100 }).triage);
+check('area: S2 near home follows the budget as before',
+  decideTriage(sigS2, { usedToday: 10, dailyCap: 10, onCooldown: false, distanceMi: 20, radiusMi: 100 }).reason === 'daily_cap');
+check('area: radius 0 means anywhere',
+  decideTriage(sigS2, { usedToday: 0, dailyCap: 10, onCooldown: false, distanceMi: 5000, radiusMi: 0 }).triage);
+check('area: unknown distance (NaN) is out of area, not waved through',
+  decideTriage(sigS2, { usedToday: 0, dailyCap: 10, onCooldown: false, distanceMi: NaN, radiusMi: 100 }).reason === 'out_of_area');
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);
   process.exit(1);
