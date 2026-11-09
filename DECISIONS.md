@@ -450,6 +450,28 @@ It isn't too much: one statewide fetch, filtered by route and milepost. The risk
   - Add `HOME_LAT`/`HOME_LON` to `.env`.
   - Point the worldview skill on orrery at `/api/home/note/latest`.
 
+147. **The home note checks whether its crime data is current, so a missing feed never reads as a quiet day (owner-approved fix).** Before this, if Denver's feed stopped or the collector broke, the morning note would have said "Nothing of note near home" for something the owner relies on while walking. That is FOUNDATION §2's data-health rule (receivers going away versus the world changing), applied to home.
+- **Recording:** the collector now stores its last successful fetch (`home:crime:lastOk`) and any failure since (`home:crime:lastError`) in Redis.
+- **Judging**, with [`crimeHealth`](apps/worker/src/home/note.ts) (pure):
+  - Nothing collected and no failure: **wait**. The first backfill hasn't finished, so no note is filed. This also fixes a first-deploy race: the 15-minute check ran alongside the backfill and would have filed a "quiet" day.
+  - Nothing collected and a failure recorded: **unavailable**.
+  - No successful fetch in 12 h (four missed 3-hourly runs): **collector stale**. This is checked first.
+  - Newest published report more than 5 days old: **Denver not publishing**. Denver publishes Mon–Fri a day or two late, so Monday's newest is often Thursday's: 4 days is normal lag. Holiday weeks may trip it, and that is true when it happens.
+  - Unknown last success (Redis reset): judged on the data alone.
+- **Saying it:**
+  - A stale day with no items files a non-quiet note that names the problem, e.g. *"Crime data is out of date: Denver's newest published reports are from Mon, Nov 2."* It pushes once per outage (latched on reason plus since), and the latch clears when data is fresh again.
+  - Items during an outage still push, with the data-health line placed right after the lead.
+  - The line is added by code, never by the model, so it can't be reworded or dropped.
+- **Verified:**
+  - `verify:home`: 8 new health checks pass, including normal Monday lag versus a week-old feed.
+  - PGlite integration with ntfy intercepted and counted (nothing sent), 13 checks pass:
+    - first boot files nothing;
+    - unreachable says so and pushes once, then files without pushing the next day;
+    - recovery clears the failure and the latch, with no health line;
+    - a week-old feed says so and pushes once;
+    - items during an outage push with the line second.
+- **Not deployed (#120).** It ships with PR #9's deploy, needs no new `.env` line, and needs one worker rebuild.
+
 ### Assumptions pending owner confirmation
 
 - OpenSky registered account + API client will be created by the owner; credentials into `.env`. **Blocks the collector chunk.**
