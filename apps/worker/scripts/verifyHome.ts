@@ -7,13 +7,24 @@
  *   pnpm --filter @orrery/worker verify:home -- --live  # + one real Denver fetch, no DB
  */
 import { priceOf } from '../src/analyst/client.js';
+import {
+  aqEpisodeStarts,
+  dayFindings,
+  keepAlert,
+  keepAlertByName,
+  parseVtec,
+  seasonOf,
+  type DayWx,
+} from '../src/home/weatherRules.js';
 import { coarseBox, coarsen, distMi } from '../src/home/anchor.js';
 import {
   assembleNoteInput,
   buildNotePrompt,
   categoryName,
   crimeHealth,
+  noteCount,
   noteLead,
+  weatherIssue,
   withHealthLine,
   offenseName,
   renderPlainNote,
@@ -141,11 +152,13 @@ check('constants: walking radius 1 mi, cluster ring ½ mi', WALK_RADIUS_MI === 1
       { what: 'car thefts', count: 8, normal: 3, unusual: true },
       { what: 'thefts', count: 14, normal: 15, unusual: false },
     ],
-    gunfire: [], flagged: [], newItems: [], newClusters: [],
+    gunfire: [], flagged: [], newItems: [], newClusters: [], newWeather: [],
+    weatherWeek: ['first freeze tonight (Tue, Nov 3)'],
   };
   const text = renderPlainRoundup(r);
   check('roundup: counts carry their normal', text.includes('gunfire reports 3 (normal 1)') && text.includes('car thefts 8 (normal 3), unusually high'));
   check('roundup: says the city reports late', /reports late/.test(text));
+  check('roundup: the week\'s weather gets a line', text.includes('Weather this week: first freeze tonight (Tue, Nov 3).'));
 }
 
 // ── data health (DECISIONS #147): quiet must mean "nothing happened" ──────
@@ -169,9 +182,61 @@ check('constants: walking radius 1 mi, cluster ring ½ mi', WALK_RADIUS_MI === 1
     collector.state === 'stale' && collector.reason === 'collector');
   check('health: unknown last success (Redis reset) → judged on the data alone',
     crimeHealth({ ...base, newestReportedMs: day('2026-11-06'), lastOkMs: null }).state === 'fresh');
-  const lined = withHealthLine('Lead line.\n- item one', upstream);
-  check('health: the line goes right after the lead', lined.split('\n')[1] === (upstream.state === 'stale' ? upstream.text : ''));
-  check('health: fresh data leaves the body alone', withHealthLine('Lead.\n- x', { state: 'fresh' }) === 'Lead.\n- x');
+  const issues = upstream.state === 'stale' ? [upstream] : [];
+  const lined = withHealthLine('Lead line.\n- item one', issues);
+  check('health: the line goes right after the lead', lined.split('\n')[1] === issues[0]?.text);
+  check('health: fresh data leaves the body alone', withHealthLine('Lead.\n- x', []) === 'Lead.\n- x');
+
+  // weather data health (#148): never holds the note back
+  check('weather health: no record yet → no issue', weatherIssue({ nowMs: now, lastOkMs: null, lastErrorMs: null }) === null);
+  check('weather health: never reached and a failure → unavailable',
+    /unavailable/.test(weatherIssue({ nowMs: now, lastOkMs: null, lastErrorMs: now - H })?.text ?? ''));
+  const wxStale = weatherIssue({ nowMs: now, lastOkMs: now - 13 * H, lastErrorMs: null });
+  check('weather health: no good fetch in 13 h → out of date', wxStale?.reason === 'weather' && /out of date/.test(wxStale.text));
+  check('weather health: a fetch 1 h ago → fine', weatherIssue({ nowMs: now, lastOkMs: now - H, lastErrorMs: null }) === null);
+  const both = withHealthLine('Lead.\n- x', [...issues, wxStale!]);
+  check('health: crime and weather lines both follow the lead', both.split('\n').length === 4 && /Weather/.test(both.split('\n')[2]!));
+}
+
+// ── weather rules (#148) ──────────────────────────────────────────────────
+{
+  const v = parseVtec('/O.NEW.KBOU.WS.W.0005.261110T0000Z-261111T0000Z/');
+  check('vtec: parsed', v?.action === 'NEW' && v.office === 'KBOU' && v.phen === 'WS' && v.sig === 'W' && v.etn === '0005');
+  check('alerts: warnings and advisories kept', keepAlert('WS', 'W') && keepAlert('WW', 'Y') && keepAlert('HT', 'Y'));
+  check('alerts: dense fog and watches dropped', !keepAlert('FG', 'Y') && !keepAlert('WS', 'A'));
+  check('alerts by name: air quality alert kept, fog and watches dropped',
+    keepAlertByName('Air Quality Alert') && !keepAlertByName('Dense Fog Advisory') && !keepAlertByName('Winter Storm Watch'));
+  check('season: Nov 2026 and Mar 2027 are one winter, July starts the next',
+    seasonOf('2026-11-09') === '2026-27' && seasonOf('2027-03-01') === '2026-27' && seasonOf('2027-07-01') === '2027-28');
+
+  const none = { freeze: false, hardFreeze: false, snow: false };
+  const day = (o: Partial<DayWx>): DayWx => ({ date: '2026-11-10', hi: 55, lo: 40, snow: 0, rain: 0, gust: 10, prevHi: 55, ...o });
+  const a = dayFindings(day({ lo: 28 }), none, 'tonight');
+  check('forecast: first freeze tonight fires once', a.findings.length === 1 && a.findings[0]!.line === 'First freeze of the season tonight: low 28°F',
+    a.findings[0]?.line);
+  check('forecast: …and not again the same season', dayFindings(day({ lo: 27 }), a.season, 'tonight').findings.length === 0);
+  const s = dayFindings(day({ snow: 0.6 }), none);
+  check('forecast: first snow at 0.5 in', s.findings[0]?.kind === 'first-snow');
+  check('forecast: later, 3 in or more is news; 2 in is not',
+    dayFindings(day({ snow: 4 }), s.season).findings[0]?.kind === 'snow' && dayFindings(day({ snow: 2 }), s.season).findings.length === 0);
+  check('forecast: heat at 100 °F, not 97', dayFindings(day({ hi: 101 }), none).findings[0]?.kind === 'heat' && dayFindings(day({ hi: 97 }), none).findings.length === 0);
+  check('forecast: a 30° drop is a cold front', dayFindings(day({ hi: 40, prevHi: 70 }), none).findings[0]?.kind === 'front');
+  check('forecast: missing numbers fire nothing', dayFindings(day({ hi: NaN, lo: NaN, snow: NaN, gust: NaN, rain: NaN, prevHi: NaN }), none).findings.length === 0);
+  check('air: an episode starts once', aqEpisodeStarts(120, 50) && !aqEpisodeStarts(120, 110) && !aqEpisodeStarts(90, 50));
+
+  // in the note: order, expiry, lead
+  const now = Date.parse('2026-11-10T14:00:00Z');
+  const rows = [
+    { id: 'w1', rule: 'wx.first', payload: { label: 'first freeze tonight', line: 'First freeze of the season tonight: low 28°F' } },
+    { id: 'w2', rule: 'wx.alert', payload: { label: 'Winter Weather Advisory', line: 'Winter Weather Advisory, until Tue 11:00 PM', ends: '2026-11-11T06:00:00Z' } },
+    { id: 'w3', rule: 'wx.alert', payload: { label: 'Wind Advisory', line: 'Wind Advisory, until Mon 6:00 PM', ends: '2026-11-10T01:00:00Z' } },
+  ];
+  const input = assembleNoteInput(rows, now);
+  check('note: an alert that already ended is accounted for but not shown',
+    input.weather.length === 2 && input.eventIds.includes('w3') && !input.weather.some((w) => w.label === 'Wind Advisory'));
+  check('note: alerts before season firsts', input.weather[0]!.rule === 'wx.alert');
+  check('note: weather in the lead', noteLead(input) === 'Winter Weather Advisory, first freeze tonight.', noteLead(input));
+  check('note: weather counts as something to say', noteCount(input) === 2);
 }
 
 // ── cost ledger: new models price as themselves ───────────────────────────

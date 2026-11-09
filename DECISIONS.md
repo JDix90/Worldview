@@ -472,6 +472,34 @@ It isn't too much: one statewide fetch, filtered by route and milepost. The risk
     - items during an outage push with the line second.
 - **Not deployed (#120).** It ships with PR #9's deploy, needs no new `.env` line, and needs one worker rebuild.
 
+## 2026-11-09 — Home briefing H2: weather and air
+
+148. **Built H2: weather and air near home join the home note and the roundup (owner-chosen next step; the mountain/I-70 layer is set aside because the owner expects to ski much less this season).** Not deployed (#120).
+- **Rules** ([weatherRules.ts](apps/worker/src/home/weatherRules.ts), pure). The backtest now imports them, so the measured rules are the running rules. Rerun at the owner's point: identical to #143/#144, 22 of 90 days for the proposed set and 87 for the owner's. The thresholds are #143 c's:
+  - NWS warnings and advisories, minus dense fog. Watches stay out, as in the backtested set.
+  - Season firsts: first freeze (≤ 32 °F), first hard freeze (≤ 25 °F), first snow (≥ 0.5 in). Seasons run July–June.
+  - Extremes: ≥ 100 °F; a ≥ 25° drop in the daily high; gusts ≥ 50 mph; ≥ 1 in of rain; ≥ 3 in of snow after the first.
+  - Air quality ≥ 101 (unhealthy for sensitive groups), once per episode.
+- **Collector** ([weather.ts](apps/worker/src/home/weather.ts)), job `home-weather` every 30 min. Every call sends the point rounded to 0.1°, as FOUNDATION §12 says. A test checked every outgoing URL.
+  - **NWS alerts each run.** One event per NWS event (office, phenomenon, significance, number), carrying its end time. An extension updates the end time while the event is still un-noted.
+  - **The forecast and air pass runs once a day, in the two hours before the note:** today's high, snow, rain and gusts, and tonight's low (which falls on tomorrow's date), plus today's forecast AQI. The note therefore always reads that morning's forecast, never yesterday's.
+- **The note:**
+  - Weather lines come after crime: alerts, then season firsts, then extremes, then air. Their labels join the lead ("…; Winter Weather Advisory, first freeze tonight.").
+  - An alert that ended before the note is marked noted but not shown. Most severe-thunderstorm warnings last under an hour, so the morning note doesn't carry yesterday afternoon's storms. The panel's HAZARDS page and the phone's own emergency alerts cover those as they happen.
+- **The roundup** gains a "Weather this week" line.
+- **Data health** is extended (#147). A missing NWS feed is not a calm day:
+  - No good fetch in 12 h: *"Weather alerts are out of date: …"*.
+  - Never reached, with a failure recorded: *"…unavailable"*.
+  - Unlike crime, weather never holds a note back.
+  - Crime and weather lines both go after the lead, and one latch covers the pair, so each new outage is announced once.
+- **Also fixed:** the code-written roundup's first line was its date range, so its push title read "Week near home: Week near home, Mon, Nov 2…". It now leads with the verdict, e.g. "0 gunfire reports within a mile (normal 0); nothing unusually high nearby.", with the date range second.
+- **How often:** with these rules, weather or air had something to say on 9 of the backtest's 90 days (August–early November). Most were August heat and storms, plus the Oct 16 freeze warning. The note is daily anyway because of crime (#144), so weather mostly adds lines, not messages. Winter should add snow, cold fronts and the first freeze.
+- **Verified:**
+  - `verify:home`: 25 new checks pass (vtec parsing, alert filtering, seasons, every forecast rule including missing data, air episodes, weather health, the note's ordering, expiry and lead, the roundup's weather line).
+  - `verify:detectors` passes. Worker, server, web and scripts typecheck.
+  - PGlite integration with live NWS and Open-Meteo calls and ntfy intercepted: 9 checks pass (rounded URLs, health recording, one event per NWS event with extension, weather lines shown, ended alert hidden but accounted for, push title, stale-weather line), plus 4 note-path checks (one push per outage, a new outage announced again, an ended alert alone files a quiet note).
+- **Deferred:** banking COtrip data for traffic (H5), since the owner expects to ski much less this season.
+
 ### Assumptions pending owner confirmation
 
 - OpenSky registered account + API client will be created by the owner; credentials into `.env`. **Blocks the collector chunk.**
