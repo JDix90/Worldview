@@ -107,6 +107,53 @@ CREATE TABLE IF NOT EXISTS baseline (
   computed_at timestamptz NOT NULL,
   PRIMARY KEY (cell, hour, daytype)
 );
+
+-- home briefing (FOUNDATION §12). Crime near home from Denver Open Data, keyed
+-- by the city's OFFENSE_ID (incident + offense code, stable across republishes;
+-- OBJECTID is not). first_seen = when this collector first saw the row, the
+-- nearest thing to a publication time the city exposes.
+CREATE TABLE IF NOT EXISTS home_crime (
+  id            text             PRIMARY KEY,
+  reported_at   timestamptz      NOT NULL,
+  occurred_at   timestamptz,
+  category      text             NOT NULL,
+  offense_type  text             NOT NULL,
+  address       text             NOT NULL DEFAULT '',
+  neighborhood  text             NOT NULL DEFAULT '',
+  lat           double precision NOT NULL,
+  lon           double precision NOT NULL,
+  first_seen    timestamptz      NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS home_crime_reported_idx ON home_crime (reported_at DESC);
+
+-- home detector output (Stage 3): the only home data the writer may see.
+-- dedupe_key makes every rule fire once per condition (one offense, one
+-- cluster crossing). noted_at is set when a home note carried the event.
+CREATE TABLE IF NOT EXISTS home_event (
+  id          text        PRIMARY KEY,
+  ts          timestamptz NOT NULL,
+  rule        text        NOT NULL,
+  dedupe_key  text        NOT NULL UNIQUE,
+  payload     jsonb       NOT NULL,
+  noted_at    timestamptz
+);
+CREATE INDEX IF NOT EXISTS home_event_ts_idx ON home_event (ts DESC);
+
+-- Stage 4 output: the morning home note and the Monday roundup. One row per
+-- kind per local day; quiet = nothing to say (no push). model is null when
+-- the text was rendered in code (no API key, spend cap, refusal or failure).
+CREATE TABLE IF NOT EXISTS home_note (
+  id          text        PRIMARY KEY,
+  date_local  date        NOT NULL,
+  kind        text        NOT NULL,
+  ts          timestamptz NOT NULL,
+  body        text        NOT NULL,
+  quiet       boolean     NOT NULL DEFAULT false,
+  items       integer     NOT NULL DEFAULT 0,
+  model       text,
+  pushed      boolean     NOT NULL DEFAULT false,
+  UNIQUE (date_local, kind)
+);
 `;
 
 export async function ensureSchema(db: Queryable): Promise<void> {

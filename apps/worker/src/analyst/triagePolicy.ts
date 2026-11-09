@@ -12,6 +12,10 @@
  *
  * Skipped S2s still land in Postgres/feed with full detector context; they
  * simply carry no analyst narrative. Pure function; Redis plumbing in jobs.ts.
+ *
+ * 2026-11-08 (DECISIONS #144): the owner keeps only flight checks relevant to
+ * the Denver area. A signal farther than the triage radius from home is not
+ * triaged at all, S1 included. It is still detected and stored.
  */
 import type { Signal } from '@orrery/shared';
 
@@ -20,7 +24,7 @@ export const TRIAGE_COOLDOWN_S = 6 * 3600;
 
 export interface TriageDecision {
   triage: boolean;
-  reason: 'S1' | 'ok' | 'daily_cap' | 'cooldown' | 'not_triageable';
+  reason: 'S1' | 'ok' | 'daily_cap' | 'cooldown' | 'not_triageable' | 'out_of_area';
 }
 
 export function decideTriage(
@@ -32,8 +36,15 @@ export function decideTriage(
     dailyCap: number;
     /** True when this dedupe_key was triaged within TRIAGE_COOLDOWN_S. */
     onCooldown: boolean;
+    /** Miles from home to the signal's center; omitted = no area limit. */
+    distanceMi?: number;
+    /** Triage radius (env.triageRadiusMi); 0 or omitted = anywhere. */
+    radiusMi?: number;
   },
 ): TriageDecision {
+  if (opts.radiusMi && opts.distanceMi !== undefined && !(opts.distanceMi <= opts.radiusMi)) {
+    return { triage: false, reason: 'out_of_area' };
+  }
   if (signal.severity === 'S1') return { triage: true, reason: 'S1' };
   if (signal.severity !== 'S2') return { triage: false, reason: 'not_triageable' };
   if (opts.onCooldown) return { triage: false, reason: 'cooldown' };

@@ -713,7 +713,16 @@ def _violent_near(s: dict, c: dict, radius_mi: float = 1.0, within_s: int = 8640
     """A violent crime within ~radius_mi of home in the last ~within_s (#135).
     This is the only crime worth interrupting a living-room glance for; the
     weekly map stays in the browser. Reuses the same equirectangular distance
-    as the CRIME ticker (~:1364)."""
+    as the CRIME ticker (~:1364).
+
+    When the server sends `homeEvents24h` (FOUNDATION §12), the worker's crime
+    detectors decide instead: gunfire or a serious violent offense within a
+    mile, or a category running above normal. The old local rule counted
+    simple assault and fired every day here (#143 e). An empty list means the
+    detectors found nothing; the local rule is only for an older server."""
+    events = s.get("homeEvents24h")
+    if isinstance(events, list):
+        return any(e.get("rule") in ("crime.gunfire", "crime.violent", "crime.cluster") for e in events)
     import math
     home = s.get("home") or {}
     hlat, hlon = home.get("lat"), home.get("lon")
@@ -1121,6 +1130,9 @@ def _page_briefing(d, s, _sys, _summ, L: Layout) -> None:
         return
     y0 = L.header_h + L.pad
     date = str(b.get("date", ""))[:10]
+    home_note = b.get("source") == "home"  # FOUNDATION §12: the home note
+    if home_note:
+        date += "  week near home" if b.get("kind") == "roundup" else "  near home"
     d.text((L.pad, y0), date, font=L.sm, fill=CYAN)
     tag = "QUIET" if b.get("quiet") else "ACTIVE"
     d.text((L.w - L.pad - d.textlength(tag, font=L.sm), y0), tag,
@@ -1141,7 +1153,8 @@ def _page_briefing(d, s, _sys, _summ, L: Layout) -> None:
     if changed:
         y += 4
         label_y = y
-        d.text((L.pad, y), "changed", font=L.sm, fill=CYAN)
+        label = "items" if home_note else "changed"
+        d.text((L.pad, y), label, font=L.sm, fill=CYAN)
         y += L.line_sm
         budget = max(1, (L.h - L.footer_h - reserve - y) // L.line_sm)
         lines = _wrap(d, _demark(changed), L.sm, max_w)
@@ -2400,6 +2413,16 @@ def selftest() -> int:
     ok = "CRIME" not in rot(s_=home_s, c_=far, hour=12)[0] and "CRIME" not in rot(s_=home_s, c_=old, hour=12)[0]
     fails += 0 if ok else 1
     print(f"  {'PASS' if ok else 'FAIL'}  a far or stale violent incident does NOT insert CRIME")
+
+    # FOUNDATION §12: with homeEvents24h the server's detectors decide
+    with_ev = dict(home_s, homeEvents24h=[{"rule": "crime.gunfire", "distMi": 0.6}])
+    ok = "CRIME" in rot(s_=with_ev, hour=12)[0]
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  a detector gunfire event inserts CRIME")
+    quiet_ev = dict(home_s, homeEvents24h=[])
+    ok = "CRIME" not in rot(s_=quiet_ev, c_=fresh, hour=12)[0]
+    fails += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  an empty event list beats the local rule (simple assault no longer inserts)")
 
     # #137: a near road closure inserts TRAFFIC (Tier-2 — never promoted)
     pages, prom = rot(c_={"closures": [{"route": "CO-52", "dist_mi": 8}]}, hour=12)

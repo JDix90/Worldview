@@ -38,6 +38,28 @@ export const env = {
    *  target; the $10 breaker + 70% alert remain the backstop. */
   webSearchesPerDay: Number(process.env.ANALYST_WEB_SEARCHES_PER_DAY ?? 4),
   triagePerDay: Number(process.env.ANALYST_TRIAGE_PER_DAY ?? 5),
+  /** Flight signals are triaged only within this many miles of home; 0 means
+   *  anywhere. The owner kept only Denver-area flight checks (DECISIONS #144):
+   *  100 mi covers the Front Range, DEN and the I-70 corridor to Vail. */
+  triageRadiusMi: Number(process.env.ANALYST_TRIAGE_RADIUS_MI ?? 100),
+  /** Precise home point for the home briefing (FOUNDATION §12, DECISIONS #144).
+   *  Set only in the appliance's .env; never committed. Unset → the server's
+   *  `settings:home` anchor, which is rounded to 0.01°. */
+  homeLat: process.env.HOME_LAT ? Number(process.env.HOME_LAT) : NaN,
+  homeLon: process.env.HOME_LON ? Number(process.env.HOME_LON) : NaN,
+  /** Local hour the home note (and Monday roundup) files; 25 disables it, as
+   *  BRIEFING_HOUR_LOCAL=25 does for the flights briefing. */
+  homeNoteHourLocal: Number(process.env.HOME_NOTE_HOUR_LOCAL ?? 7),
+  /** FOUNDATION §8/§12: small model for the note, larger for the roundup,
+   *  current generation (the triage/briefing pins above predate them). */
+  homeNoteModel: process.env.HOME_NOTE_MODEL ?? 'claude-haiku-5-5',
+  homeRoundupModel: process.env.HOME_ROUNDUP_MODEL ?? 'claude-sonnet-5-5',
+  /** Home notes go to the phone by default (owner, DECISIONS #144): ntfy
+   *  priority 3, so the phone's own sound/silent settings decide. */
+  homePushEnabled: process.env.HOME_PUSH_ENABLED !== 'false',
+  /** Last-resort home, matching the server's default (Denver). */
+  ownerLat: Number(process.env.OWNER_LAT ?? 39.74),
+  ownerLon: Number(process.env.OWNER_LON ?? -104.99),
   briefingHourLocal: Number(process.env.BRIEFING_HOUR_LOCAL ?? 7),
   briefingTimezone: process.env.BRIEFING_TIMEZONE ?? 'America/Denver',
   /** Anomaly push. Ships false — the FOUNDATION §4 calibration gate. */

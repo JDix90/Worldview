@@ -52,6 +52,13 @@ export async function pushAnomaly(title: string, message: string): Promise<boole
   return send(title, message, 4);
 }
 
+/** Home note / roundup (FOUNDATION §12, DECISIONS #144): priority 3, ntfy's
+ *  default, so the phone's own sound and silent settings decide how it lands. */
+export async function pushHome(title: string, message: string): Promise<boolean> {
+  if (!env.homePushEnabled) return false;
+  return send(title, message, 3);
+}
+
 export async function pushOps(title: string, message: string): Promise<boolean> {
   if (!env.opsAlertsEnabled) return false;
   return send(title, message, 3);

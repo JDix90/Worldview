@@ -362,6 +362,94 @@ Running log. Every non-obvious choice gets a line: what was decided, why, what w
 
 141. **The CRIME query now retries (3 attempts, 15 s each, 1 s / 3 s backoff) instead of failing on one 20 s stall (owner-approved fix for #140's "seen in passing" (a)).** Denver's crime query is normally fast: four cold bounding boxes, each repeated, all answered in 3.6–4.1 s, so there's no cache warm-up to wait out. But it intermittently stalls. In the dev app one request hit the old 20 s timeout and the immediate re-run returned 775 rows in 3.9 s. CRIME is an eager fetch, once per home, with no retry, so a single stall left the chip on "—" until a reload (the owner's screenshot). **Change** ([crime.ts](apps/web/src/feed/crime.ts)): `fetchJsonWithRetry` retries stalls, network errors, 429/5xx, unparseable bodies, and ArcGIS's HTTP-200 `{"error": …}` replies. The last were a silent bug: the error body parsed as zero features, so the chip would have read CRIME 0, not "—". Other 4xx fail at once, since the query itself is bad and a retry can't help. The per-attempt timeout drops from 20 s to 15 s, still ~4× the normal answer, so a stall recovers in ~20 s and a dead upstream gives up after ~49 s. *Rejected:* a generic retry in `useCityMap.runFetch` for every layer (each upstream fails differently, and some are server proxies with their own retries; widen it only when another layer shows the same stall); just raising the timeout (a stalled request doesn't recover by waiting longer, and a fresh one does). *Verified:* a stubbed-fetch suite passes 9/9: stall→answer, network error→answer, 503→answer, 429→502→answer, ArcGIS `{"error"}`→answer, truncated JSON→answer, 400 fails after 1 call, three stalls give up after 3, and a fine first try makes 1 call. The live Denver query through the new path returns 775 rows in 3.95 s. In the running app, CRIME 775 loads; with the first crime request forced to hang, the real code path aborted it at 15 s, retried after 1 s and returned 775 rows (19.8 s total). Under the old code that same request ended as "—" at 20 s. 311 uses the same ArcGIS host but hasn't shown a stall, so it's unchanged. Client-only; **not deployed** (#120). Ships in the same webdist rsync as #140.
 
+## 2026-11-08 — Home briefing: the analyst comes home
+
+142. **The analyst's subject moves from world flights to home; FOUNDATION amended (§1, §5, §8, §11, new §12) (owner-decided).** The owner had switched off the daily briefing on the appliance (`BRIEFING_HOUR_LOCAL=25`) and dropped BRIEFING from the panel's local `PAGES`. Asked why: *"it was only about world flights which wasn't really relevant or helpful to me, especially since it was costing money. There was never enough variance or change to really matter or be interesting. If it was about something more useful or interesting (such as crime around the home, weather events, home details, changes in traffic patterns, etc etc....) then it might be useful to have turned on."* Against §11 that is a "no" to Q1 for the flights analyst, so flights stop at one layer: the globe, collectors, detectors, triage and feed keep running untouched, and nothing new is built on them. The four-stage design is kept and re-aimed at home. Nearly everything the owner has asked for since July has been home-scale: the CITY map (#113–#141), the HOME dashboard, the overhead radar and the panel's local inserts. First sources, agreed with the owner: crime, weather, and the house's own power and internet. Traffic is second because it needs collected history; 311 and indoor sensors come later. **Spend, from the appliance's `analyst_usage`:** Aug–Sep 2026 ran about $8/month, of which flight triage was ~$6.50 (151–156 calls/month, web search included) and the briefing ~$1.55. Switching the briefing off removed the smaller part. Setting `ANALYST_TRIAGE_PER_DAY=0` would stop S2 triage (S1 is always triaged, #109) and is an open owner decision, not made here. *Rejected:* (a) keep the flights briefing and tune it, because the variance to tune isn't there; (b) switch the analyst off entirely, because home data does vary (#143) and the stage that judges change against normal is the part worth keeping; (c) a daily home briefing whatever the content, which would repeat the failure (#143: totals around this home are flat and individual incidents happen daily). The riskiest assumption, that enough changes near home to be worth a message, was tested before any build (#143).
+
+143. **Home-briefing backtest: 1–2 notable days a week, so a note only on those mornings plus a Monday roundup, not a daily briefing (proposed; the owner ratifies it with the plan).** [backtestHomeBriefing.ts](apps/worker/scripts/backtestHomeBriefing.ts) (`pnpm --filter @orrery/worker backtest:home -- --lat=… --lon=…`) takes the home point as an argument and never commits it. It replayed candidate rules at the saved home anchor over 2026-08-07 → 11-04, 90 days ending the day before the newest crime day. Sources: Denver crime within 1 mi with a year of history before the window; Open-Meteo archived day-0 forecasts; Open-Meteo air quality; and the NWS warning archive by point (Iowa Environmental Mesonet). Weather and alert calls used the point rounded to 0.1°. Findings:
+(a) **Single crimes are background noise around this home.** There were 34.8 offenses a day within 1 mi. A serious violent offense (murder, robbery, aggravated assault, sexual assault) happened within ½ mi on 56 of 90 days and within 1 mi on 85. Gunfire or homicide within ½ mi happened on 16 days. On 12 of those, shots were fired with no victim offense recorded (`weapon-unlawful-discharge-of`). The other 4 had a shooting assault, a homicide, or shots into an occupied building.
+(b) **Change against normal is the real signal.** The rule compares each category's 7-day count within ½ mi with the prior year's median and MAD. It alerts at ≥ max(3, median + max(3, 3σ)) and stays latched until the count is back near normal. It fired 4 times in 90 days: auto theft twice (8 against a normal 3), larceny once (31 against 16), and thefts from vehicles once (16 against 7).
+(c) **Weather worth mentioning was rare in a mild, dry fall.**
+- NWS warnings: 2 (severe thunderstorm 08-26, freeze 10-16).
+- Non-fog advisories: 2. Dense-fog advisories: 4, excluded because morning fog isn't news.
+- Heat: ≥95 °F fired on 11 August–September days, ordinary Denver summer, so the line moved to ≥100 °F (2 days) plus NWS heat products.
+- No snow. No first freeze at the home grid point: the zone's freeze warning came 10-16, but the point first reached 31 °F on 11-07, after the window.
+- One air-quality episode (AQI 112 on 08-08).
+- Winter will add snow and cold-front days. Rerun in February before judging winter cadence.
+
+(d) **Scenario totals.**
+- The proposed set fired on 21 of 90 days: a median of 1.5 days a week, 2 of 14 weeks fully quiet, and a longest quiet run of 17 days. It combines the clusters, gunfire within ½ mi, NWS warnings and non-fog advisories, season firsts, extremes and air quality.
+- Leaving out shots fired with no victim drops it to 11 of 90 days.
+- Reporting every serious violent offense within ½ mi gives 59 of 90; within 1 mi gives 85.
+
+(e) **The panel's CRIME exception page shows every day here.** Its rule (any violent offense within ~1 mi in 24 h, #135) matched on 90 of 90 days: 459 offenses, 230 of them simple assault. At this home it is effectively a permanent page, not an exception. It is a retune candidate using (b) and the gunfire rule.
+(f) **Two limits.**
+- The saved anchor is rounded to 0.01° (`POST /api/settings/home`), so it can be up to ~0.35 mi off. A ¼-mi ring (20 of 90 days in the run) means nothing yet. ½ mi is the finest honest ring until the owner decides whether to keep a precise point on the appliance.
+- Crime is grouped by the date it was reported, but Denver publishes in batches Mon–Fri. A live note sees weekend reports on Monday, which is also why the roundup runs Monday.
+
+*Proposed:* a home note only on mornings when a rule fired, plus a Monday weekly roundup. The rules start as the proposed set, and phone push starts in shadow mode. The orrery journal starts on 2026-11-07, and the collector history shows the appliance off from 10-10 to 11-07, so the house rules (power, internet) have no history to backtest and start untested. Plan: [docs/plans/2026-11-08-home-briefing.md](docs/plans/2026-11-08-home-briefing.md). Nothing is built or deployed yet.
+
+144. **Plan ratified with five owner changes (owner-decided).**
+(1) **The morning note names every gunfire and serious violent offense within 1 mi.** Owner: *"I often walk to places within a mile radius around my home."* That includes shots fired with no one hit, and *"Other violent crimes would also be good to know about."* This overrides #143's restraint on single incidents inside the walking radius. Rerun at the owner's point: the note has something on 87 of 90 days (median 3 items a day, at most 8). For comparison, the proposed set gives 22 of 90, and limiting violent crime to ½ mi gives 68. So the note is daily in practice. Weekends are lighter, because Denver publishes Mon–Fri. Change against normal stays the rule for everything else, and for the roundup.
+(2) **The owner chose a precise home point.** It lives only in the appliance's `.env` as `HOME_LAT`/`HOME_LON`, never in the repo, a prompt, or an upstream query. It was located from city crime records geocoded to the corner the owner named. The search filtered locally inside the 0.01° box the app already sends, so the street names never went into a query. The existing `settings:home` anchor already equals the point rounded to 0.01°, so the globe, CITY map and panel don't change.
+(3) **Flight triage only near Denver.** Signals more than 100 mi from home (`ANALYST_TRIAGE_RADIUS_MI`) aren't triaged, S1 included. 100 mi covers the Front Range, DEN, and I-70 to Vail. Signals outside it are still detected, stored and shown in the feed, just without a narrative or a shadow-log entry. This should remove nearly all of the ~$6.50/month triage spend: D3's watch regions are all abroad, and Denver-area S1/S2s are rare.
+(4) **Phone push is on from day one**, at ntfy's default priority 3, so the phone's own settings decide how it arrives: silent stays silent, and it is never louder than other notifications. This replaces #143's shadow period. Flight S1 pushes keep priority 4; this entry doesn't change them.
+(5) **Traffic areas** (owner: *"As a skier, it would be interesting to see those trends"*): Denver city limits, I-25 from Fort Collins to Colorado Springs, and I-70 from Denver to Vail. Probed with the appliance's key:
+- COtrip serves `incidents`, `plannedEvents`, `roadConditions` (including chain and traction-law states), `destinations` and `signs`. `speeds`, `segments` and `travelTimes` return 404.
+- `destinations` holds corridor travel times, such as I-70 segments toward Vail and I-25 toward Monument. All of them read 0 at the Sunday-evening probe, so a busy-hour check is still owed.
+
+It isn't too much: one statewide fetch, filtered by route and milepost. The risk is noise, since I-25 has crashes all day. So the corridor rules are closures, chain and traction-law changes, and travel time against a normal for that weekday and hour.
+
+145. **Built: the home crime vertical (H0 + H1) and the triage area gate. Verified locally; not deployed (#120).**
+- **Worker modules:**
+  - [anchor.ts](apps/worker/src/home/anchor.ts) resolves the home point (precise → rounded → default). Its `coarseBox` is the query box: centred on the point rounded to 0.01°, padded 0.006°, so it covers the rounding error.
+  - [crimeRules.ts](apps/worker/src/home/crimeRules.ts) holds the pure rules. The backtest now imports them, so the rules that were measured are the rules that run.
+  - [crime.ts](apps/worker/src/home/crime.ts) is the collector plus detectors, run as job `home-crime` every 3 h.
+- **Tables:** `home_crime` is keyed by the city's `OFFENSE_ID` (incident plus offense code, stable across republishes; `OBJECTID` is not). `home_event` has a unique `dedupe_key`, so each offense and each cluster crossing fires once.
+- **Collection:** the first run backfills 400 days (19,473 rows at the public test anchor, in 14 s). Later runs re-read 10 days, because the city adds and corrects reports late.
+- **News window:** an offense counts as news for 7 days after it is reported, but only 2 days on the backfill run, so the first note isn't a week's backlog. The cluster latch lives in Redis.
+- **Verified:**
+  - `verify:home` (new): 16 synthetic checks at the public anchor, plus 3 live checks (a real Denver fetch, no database), all pass.
+  - `verify:detectors`: 6 new area-gate checks, all pass.
+  - A run against an in-memory Postgres (PGlite, scratch only, not a repo dependency): the backfill produced 6 nearby events, a second run added 0, and there were no duplicate offense events.
+  - The worker and scripts typecheck.
+- **Not done yet:**
+  - the note writer and phone push (H4);
+  - weather and the house (H2, H3);
+  - the panel's CRIME retune, moved to H4 because it needs the summary endpoint.
+- **To deploy:** an image rebuild on orrery, plus `HOME_LAT`/`HOME_LON` in its `.env`.
+
+146. **Built H4: the home note, the Monday roundup and phone push, with the panel and web wired in. Verified locally; not deployed (#120).**
+- **Writer:** [note.ts](apps/worker/src/home/note.ts) runs as job `home-note-check` every 15 min.
+  - It files once per local day after `HOME_NOTE_HOUR_LOCAL` (default 7; 25 disables it). Like the briefing (#93), a late boot files late rather than never.
+  - On Mondays the roundup replaces the note and carries its items, so the phone gets one push, not two.
+  - A day with no events files a quiet row and sends no push.
+- **Models:**
+  - `claude-haiku-5-5` writes the note at effort low; `claude-sonnet-5-5` writes the roundup at effort medium. These are FOUNDATION §8's "current generation"; the older triage and briefing pins are untouched.
+  - Adaptive thinking stays on, because these models reject disabled thinking at some or all efforts. `max_tokens` is 16k, as a ceiling only.
+  - The price table gains both models. `priceOf` now picks the longest matching prefix, since it would otherwise have priced sonnet-5-5 as sonnet-5.
+  - Usage is ledgered as `home_note` / `home_roundup`, so the monthly spend cap covers both.
+- **The model decides nothing and isn't required.** With no key, the spend cap reached, a refusal, an empty reply or an API error, the same facts go out rendered in code (`model` null, shown as "plain" in the feed). Server-side refusal fallbacks weren't enabled: Sonnet 5.5 accepts only the `fallbacks: "default"` form, which SDK 0.111 doesn't type. The plain version covers that case.
+- **Push:** `pushHome` sends at ntfy priority 3 (#144), on by default (`HOME_PUSH_ENABLED=false` turns it off), to the existing `NTFY_TOPIC`. The title is "Near home: <lead>" and the body is the items.
+- **Server:**
+  - New `GET /api/home/notes` and `GET /api/home/note/latest` (the latter for Ossawatomix).
+  - The summary's `briefing` carries the home note once one exists. It keeps the same shape plus `source` and `kind`, so a panel that hasn't been updated still renders it.
+  - New `homeEvents24h` in the summary.
+- **Panel:** the CRIME insert is decided by `homeEvents24h` when present, so simple assault no longer inserts. The old local any-violent rule now applies only with an older server. The BRIEFING page labels the note "near home" or "week near home", and its digest "items".
+- **Web:** the FEED gains a HOME tab, first and selected by default.
+- **Crime fix found by the integration run:** the backfill run's 2-day news window now counts back from the newest reported offense, not the clock. On a weekend (Denver's newest data was Thursday) the clock-based window held nothing, so the first note would have been empty.
+- **Verified:**
+  - `verify:home`: 34 checks pass. `verify:detectors` passes.
+  - Panel `--selftest`: all pass, including 2 new CRIME cases. The BRIEFING page was rendered at 480×320 with a synthetic note.
+  - Integration against PGlite with an injected transport (no key, no spend): model text filed as written; the request shape (model, effort, 16k) is right; usage is ledgered; a refusal files the plain version; a quiet day doesn't push; a second filing for the same day is refused; an API outage files a plain roundup built from a real year of counts; the guard files once.
+- **Not verified:** a live model call (no Anthropic key on this Mac; the key is on the appliance) and a real ntfy delivery. Both happen on the first deployed note.
+- **To deploy (owner, #120):**
+  - Rebuild the worker and server images.
+  - Rsync webdist (for the FEED tab).
+  - Merge the pager file, keeping the local `PAGES` edit; add BRIEFING back to see the note on the panel.
+  - Add `HOME_LAT`/`HOME_LON` to `.env`.
+  - Point the worldview skill on orrery at `/api/home/note/latest`.
+
 ### Assumptions pending owner confirmation
 
 - OpenSky registered account + API client will be created by the owner; credentials into `.env`. **Blocks the collector chunk.**
