@@ -23,6 +23,7 @@ import { pushHome } from '../analyst/notify.js';
 import { resolveHomeAnchor } from './anchor.js';
 import { crimeSeries, CLUSTER_RADIUS_MI, CRIME_ERR_KEY, CRIME_OK_KEY, WALK_RADIUS_MI } from './crime.js';
 import { clusterLevels, localDay, trailing7 } from './crimeRules.js';
+import { WX_ERR_KEY, WX_OK_KEY } from './weather.js';
 
 const TZ = 'America/Denver';
 const MAX_NOTE_LINES = 12;
@@ -116,23 +117,46 @@ export interface ClusterItem {
   radiusMi: number;
   windowEnd: string;
 }
+/** A weather or air finding (#148): its words are made by the detector. */
+export interface WeatherItem {
+  rule: string;
+  /** Short form for the lead line, e.g. "Winter Storm Warning". */
+  label: string;
+  /** The note's line, e.g. "Winter Storm Warning, Tue 5:00 PM to Wed 11:00 AM". */
+  line: string;
+}
 export interface NoteInput {
   items: NoteItem[];
   clusters: ClusterItem[];
+  weather: WeatherItem[];
+  /** Every event this note accounts for, shown or not (an alert that has
+   *  already ended is marked noted without being shown). */
   eventIds: string[];
 }
+const WEATHER_RULES = new Set(['wx.alert', 'wx.first', 'wx.extreme', 'aq.episode']);
+/** Alerts first, then season firsts, extremes and air, in that order. */
+const WEATHER_ORDER = ['wx.alert', 'wx.first', 'wx.extreme', 'aq.episode'];
 export interface EventRow {
   id: string;
   rule: string;
   payload: Record<string, unknown>;
 }
 
-export function assembleNoteInput(rows: EventRow[]): NoteInput {
+export function assembleNoteInput(rows: EventRow[], nowMs = Date.now()): NoteInput {
   const items: NoteItem[] = [];
   const clusters: ClusterItem[] = [];
+  const weather: WeatherItem[] = [];
   const eventIds: string[] = [];
   for (const r of rows) {
     const p = r.payload;
+    if (WEATHER_RULES.has(r.rule)) {
+      eventIds.push(r.id);
+      // An alert that ended before the note is old news: account for it, don't show it.
+      const ends = Date.parse(String(p.ends ?? ''));
+      if (r.rule === 'wx.alert' && Number.isFinite(ends) && ends <= nowMs) continue;
+      weather.push({ rule: r.rule, label: String(p.label ?? ''), line: String(p.line ?? p.label ?? '') });
+      continue;
+    }
     if (r.rule === 'crime.cluster') {
       clusters.push({
         what: categoryName(String(p.key)),
@@ -161,8 +185,12 @@ export function assembleNoteInput(rows: EventRow[]): NoteInput {
   }
   // gunfire first, then other violent crime, each nearest first (FOUNDATION §12)
   items.sort((a, b) => (a.kind === b.kind ? a.distMi - b.distMi : a.kind === 'gunfire' ? -1 : 1));
-  return { items, clusters, eventIds };
+  weather.sort((a, b) => WEATHER_ORDER.indexOf(a.rule) - WEATHER_ORDER.indexOf(b.rule));
+  return { items, clusters, weather, eventIds };
 }
+
+/** How many things a note has to say. */
+export const noteCount = (i: NoteInput): number => i.items.length + i.clusters.length + i.weather.length;
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const ring = (mi: number) => (mi === 0.5 ? '½ mi' : `${mi} mi`);
@@ -179,30 +207,34 @@ export function noteLead(input: NoteInput): string {
   if (v) parts.push(plural(v, 'violent crime', 'violent crimes'));
   const near = parts.length ? `${parts.join(' and ')} within a mile` : '';
   const up = input.clusters.map((c) => `${c.what} up`).join(', ');
-  return [near, up].filter(Boolean).join('; ') + '.';
+  const wx = input.weather.map((w) => w.label).filter(Boolean).join(', ');
+  const lead = [near, up, wx].filter(Boolean).join('; ');
+  return lead.charAt(0).toUpperCase() + lead.slice(1) + '.';
 }
 
 /** The note rendered in code: the fallback, and the shape the model is asked for. */
 export function renderPlainNote(input: NoteInput): string {
   const lines = [noteLead(input)];
-  const all = [...input.items.map(itemLine), ...input.clusters.map(clusterLine)];
+  const all = [...input.items.map(itemLine), ...input.clusters.map(clusterLine), ...input.weather.map((w) => w.line)];
   lines.push(...all.slice(0, MAX_NOTE_LINES).map((l) => `- ${l}`));
   if (all.length > MAX_NOTE_LINES) lines.push(`+${all.length - MAX_NOTE_LINES} more`);
   return lines.join('\n');
 }
 
-export const NOTE_SYSTEM = `You write the morning home note for ORRERY, a personal instrument that watches one person's neighborhood in Denver. The owner walks within about a mile of home and wants to know about gunfire and serious violent crime nearby, and about crime running above normal. The note arrives as a phone notification.
+export const NOTE_SYSTEM = `You write the morning home note for ORRERY, a personal instrument that watches one person's neighborhood in Denver. The owner walks within about a mile of home and wants to know about gunfire and serious violent crime nearby, crime running above normal, and weather worth knowing about today. The note arrives as a phone notification.
 
 Rules:
 - First line: one short sentence that sums up the note. No greeting.
 - Then one line per item, in the order given: what, where (the block or intersection exactly as given), distance and direction from home, and when it was reported. If an item has an "occurred" time, say when it happened as well.
 - Then one line per cluster: what, the count over 7 days, and its normal.
+- Then one line per weather entry, keeping its facts and times exactly as given.
 - Use only what is given. No background, causes, speculation, safety advice or reassurance, and don't link incidents to each other.
 - Plain text: no markdown, headers or emoji. Under 900 characters; if the lines don't fit, end with how many more there are.`;
 
 export function buildNotePrompt(input: NoteInput): string {
   const { items, clusters } = input;
-  return `Write this morning's home note. Distances are miles from home; "dir" is the direction from home.\n\n\`\`\`json\n${JSON.stringify({ items, clusters }, null, 2)}\n\`\`\``;
+  const weather = input.weather.map((w) => w.line);
+  return `Write this morning's home note. Distances are miles from home; "dir" is the direction from home.\n\n\`\`\`json\n${JSON.stringify({ items, clusters, weather }, null, 2)}\n\`\`\``;
 }
 
 // ── the roundup ───────────────────────────────────────────────────────────
@@ -223,6 +255,9 @@ export interface RoundupInput {
   /** Items not yet in a note: Monday's roundup carries them. */
   newItems: NoteItem[];
   newClusters: ClusterItem[];
+  newWeather: string[];
+  /** The week's weather and air findings, e.g. "first freeze tonight (Tue, Nov 3)". */
+  weatherWeek: string[];
 }
 
 function vsNormal(what: string, daily: number[] | undefined, last: number): CountVsNormal {
@@ -246,6 +281,10 @@ export async function assembleRoundupInput(db: Queryable, redis: Pick<Redis, 'ge
     `SELECT id, rule, payload FROM home_event WHERE ts >= now() - interval '7 days' AND rule IN ('crime.gunfire', 'crime.cluster') ORDER BY ts`,
   );
   const past = assembleNoteInput(week.rows as EventRow[]);
+  const wx = await db.query(
+    `SELECT ts, payload->>'label' AS label FROM home_event
+     WHERE ts >= now() - interval '7 days' AND rule IN ('wx.alert', 'wx.first', 'wx.extreme', 'aq.episode') ORDER BY ts`,
+  );
   return {
     windowStart: s.days[Math.max(0, last - 6)]!,
     windowEnd: s.newest,
@@ -258,23 +297,33 @@ export async function assembleRoundupInput(db: Queryable, redis: Pick<Redis, 'ge
     flagged: past.clusters,
     newItems: fresh.items,
     newClusters: fresh.clusters,
+    newWeather: fresh.weather.map((w) => w.line),
+    weatherWeek: wx.rows.map((r) => `${r.label} (${dayText(localDay(new Date(r.ts).getTime()))})`),
   };
 }
 
 const countLine = (c: CountVsNormal) => `${c.what} ${c.count} (normal ${c.normal})${c.unusual ? ', unusually high' : ''}`;
 
 export function renderPlainRoundup(r: RoundupInput): string {
-  const lines = [`Week near home, ${dayText(r.windowStart)} to ${dayText(r.windowEnd)} (the city reports late).`];
   const { gunfire, violent } = r.withinOneMile;
-  lines.push(`Within ${WALK_RADIUS_MI} mi: ${countLine(gunfire)}; ${countLine(violent)}.`);
   const unusual = r.withinHalfMile.filter((c) => c.unusual);
+  // The first line is the push title's text (after "Week near home: "), so
+  // it leads with the verdict, not the date range.
+  const lead = [
+    `${plural(gunfire.count, 'gunfire report', 'gunfire reports')} within a mile (normal ${gunfire.normal})`,
+    unusual.length ? `${unusual.map((c) => c.what).join(', ')} unusually high` : 'nothing unusually high nearby',
+  ].join('; ');
+  const lines = [`${lead.charAt(0).toUpperCase()}${lead.slice(1)}.`];
+  lines.push(`Reports from ${dayText(r.windowStart)} to ${dayText(r.windowEnd)} (the city reports late).`);
+  lines.push(`Within ${WALK_RADIUS_MI} mi: ${countLine(gunfire)}; ${countLine(violent)}.`);
   // "unusually high" = past the cluster alert line, not merely over the median
   if (unusual.length) lines.push(`Unusually high within ½ mi: ${unusual.map(countLine).join('; ')}.`);
   else lines.push('Nothing unusually high within ½ mi.');
   const rest = r.withinHalfMile.filter((c) => !c.unusual).slice(0, 4);
   if (rest.length) lines.push(`Otherwise: ${rest.map(countLine).join('; ')}.`);
   for (const g of r.gunfire) lines.push(`- ${itemLine(g)}`);
-  const fresh = [...r.newItems.map(itemLine), ...r.newClusters.map(clusterLine)];
+  if (r.weatherWeek.length) lines.push(`Weather this week: ${r.weatherWeek.join('; ')}.`);
+  const fresh = [...r.newItems.map(itemLine), ...r.newClusters.map(clusterLine), ...r.newWeather];
   if (fresh.length) {
     lines.push('Since the last note:');
     lines.push(...fresh.slice(0, MAX_NOTE_LINES).map((l) => `- ${l}`));
@@ -289,7 +338,8 @@ Rules:
 - Lead with what changed against normal, then what stayed normal. A quiet week gets one or two sentences saying so.
 - Every count comes with its normal, a typical week over the past year: "5 car break-ins within half a mile, normal is 6."
 - Give each gunfire report its own line: what, where, distance and direction, when.
-- If newItems or newClusters has anything, add it after a short line such as "Since the last note:", one line each in the same form.
+- If weatherWeek has entries, give the week's weather one short line, keeping the facts as given.
+- If newItems, newClusters or newWeather has anything, add it after a short line such as "Since the last note:", one line each in the same form.
 - Report what the data says. Don't guess at causes, give safety advice, or reassure.
 - Say once that the city publishes reports late, so the week runs to windowEnd.
 - Plain text for a phone notification: no markdown or headers. Under 1,200 characters. End with one dry sign-off line.`;
@@ -361,21 +411,57 @@ export async function loadCrimeHealth(db: Queryable, redis: Pick<Redis, 'get'>):
   });
 }
 
-/** True the first time a given outage is announced; later notes in the same
- *  outage still say it, but don't push for it alone. */
-async function firstNotice(redis: Pick<Redis, 'get' | 'set'>, h: Extract<CrimeHealth, { state: 'stale' }>): Promise<boolean> {
-  const key = `${h.reason}:${h.since}`;
+/** One data source the note can't vouch for today (crime or weather). */
+export interface StaleIssue {
+  reason: string;
+  since: string;
+  text: string;
+}
+
+/** Weather data health (#148), the same idea for the NWS alerts the note
+ *  relies on. Unlike crime, weather never holds the note back: no record at
+ *  all (first boot) just means nothing to say yet. */
+export function weatherIssue(o: { nowMs: number; lastOkMs: number | null; lastErrorMs: number | null }): StaleIssue | null {
+  if (o.lastOkMs === null) {
+    return o.lastErrorMs === null
+      ? null
+      : { reason: 'weather', since: 'never',
+          text: "Weather alerts are unavailable: orrery hasn't been able to reach the National Weather Service." };
+  }
+  if (o.nowMs - o.lastOkMs > COLLECTOR_STALE_MS) {
+    return { reason: 'weather', since: String(o.lastOkMs),
+      text: `Weather alerts are out of date: orrery hasn't reached the National Weather Service since ${whenText(o.lastOkMs)}.` };
+  }
+  return null;
+}
+
+export async function loadWeatherIssue(redis: Pick<Redis, 'get'>): Promise<StaleIssue | null> {
+  const ok = Number(await redis.get(WX_OK_KEY));
+  let errAt: number | null = null;
+  try {
+    const raw = await redis.get(WX_ERR_KEY);
+    if (raw) errAt = Number((JSON.parse(raw) as { at?: unknown }).at) || null;
+  } catch {
+    /* unreadable error record: treat as none */
+  }
+  return weatherIssue({ nowMs: Date.now(), lastOkMs: Number.isFinite(ok) && ok > 0 ? ok : null, lastErrorMs: errAt });
+}
+
+/** True the first time a given set of outages is announced; later notes in
+ *  the same outage still say it, but don't push for it alone. */
+async function firstNotice(redis: Pick<Redis, 'get' | 'set'>, issues: StaleIssue[]): Promise<boolean> {
+  const key = issues.map((h) => `${h.reason}:${h.since}`).join('|');
   if ((await redis.get(HEALTH_LATCH)) === key) return false;
   await redis.set(HEALTH_LATCH, key);
   return true;
 }
 
-/** The health line goes right after the lead, so it shows in the push body.
- *  Added in code, never by the model, so it can't be reworded or dropped. */
-export function withHealthLine(body: string, h: CrimeHealth): string {
-  if (h.state !== 'stale') return body;
+/** Health lines go right after the lead, so they show in the push body.
+ *  Added in code, never by the model, so they can't be reworded or dropped. */
+export function withHealthLine(body: string, issues: StaleIssue[]): string {
+  if (!issues.length) return body;
   const [lead, ...rest] = body.split('\n');
-  return [lead, h.text, ...rest].join('\n');
+  return [lead, ...issues.map((h) => h.text), ...rest].join('\n');
 }
 
 // ── writing and filing ────────────────────────────────────────────────────
@@ -476,20 +562,22 @@ export async function fileNote(
   client: AnalystClient,
   dateLocal: string,
   events: EventRow[],
-  health: CrimeHealth = { state: 'fresh' },
+  issues: StaleIssue[] = [],
 ): Promise<FiledNote | null> {
   const input = assembleNoteInput(events);
-  const n = input.items.length + input.clusters.length;
-  if (n === 0 && health.state === 'stale') {
+  const n = noteCount(input);
+  if (n === 0 && issues.length) {
     // Not a quiet day: the data didn't arrive. Say so; push once per outage.
-    const push = await firstNotice(redis, health);
-    return file(db, dateLocal, 'note', health.text, { quiet: false, items: 0, model: null, eventIds: [], title: 'Near home: %s', push });
+    const push = await firstNotice(redis, issues);
+    return file(db, dateLocal, 'note', issues.map((h) => h.text).join('\n'), {
+      quiet: false, items: 0, model: null, eventIds: input.eventIds, title: 'Near home: %s', push,
+    });
   }
   if (n === 0) {
-    return file(db, dateLocal, 'note', 'Nothing of note near home.', { quiet: true, items: 0, model: null, eventIds: [], title: '' });
+    return file(db, dateLocal, 'note', 'Nothing of note near home.', { quiet: true, items: 0, model: null, eventIds: input.eventIds, title: '' });
   }
   const written = await compose(client, 'home_note', env.homeNoteModel, 'low', NOTE_SYSTEM, buildNotePrompt(input));
-  const body = withHealthLine(tidy(written ?? renderPlainNote(input)), health);
+  const body = withHealthLine(tidy(written ?? renderPlainNote(input)), issues);
   return file(db, dateLocal, 'note', body, {
     quiet: false, items: n, model: written ? env.homeNoteModel : null, eventIds: input.eventIds, title: 'Near home: %s',
   });
@@ -501,16 +589,16 @@ export async function fileRoundup(
   client: AnalystClient,
   dateLocal: string,
   events: EventRow[],
-  health: CrimeHealth = { state: 'fresh' },
+  issues: StaleIssue[] = [],
 ): Promise<FiledNote | null> {
   const fresh = assembleNoteInput(events);
   const input = await assembleRoundupInput(db, redis, fresh);
-  if (!input) return fileNote(db, redis, client, dateLocal, events, health); // no crime history yet
+  if (!input) return fileNote(db, redis, client, dateLocal, events, issues); // no crime history yet
   const written = await compose(client, 'home_roundup', env.homeRoundupModel, 'medium', ROUNDUP_SYSTEM, buildRoundupPrompt(input));
-  const body = withHealthLine(tidy(written ?? renderPlainRoundup(input)), health);
+  const body = withHealthLine(tidy(written ?? renderPlainRoundup(input)), issues);
   return file(db, dateLocal, 'roundup', body, {
     quiet: false,
-    items: fresh.items.length + fresh.clusters.length,
+    items: noteCount(fresh),
     model: written ? env.homeRoundupModel : null,
     eventIds: fresh.eventIds,
     title: 'Week near home: %s',
@@ -528,17 +616,19 @@ export async function jobHomeNoteCheck(redis: Redis, db: Queryable): Promise<voi
   const kind = monday ? 'roundup' : 'note';
   const done = await db.query(`SELECT 1 FROM home_note WHERE date_local = $1 AND kind = $2`, [dateLocal, kind]);
   if (done.rows.length) return;
-  const health = await loadCrimeHealth(db, redis);
-  if (health.state === 'never') {
+  const crime = await loadCrimeHealth(db, redis);
+  if (crime.state === 'never') {
     // First boot: the backfill hasn't finished. Filing now would record a
     // "quiet" day that is really "no data yet" (DECISIONS #147); check again
     // in 15 minutes.
     log('home', 'note waits: crime data not collected yet');
     return;
   }
-  if (health.state === 'fresh') await redis.del(HEALTH_LATCH); // outage over: the next one gets announced
+  const wx = await loadWeatherIssue(redis);
+  const issues: StaleIssue[] = [...(crime.state === 'stale' ? [crime] : []), ...(wx ? [wx] : [])];
+  if (!issues.length) await redis.del(HEALTH_LATCH); // outage over: the next one gets announced
   const { rows } = await db.query(`SELECT id, rule, payload FROM home_event WHERE noted_at IS NULL ORDER BY ts`);
   const client = new AnalystClient(db);
-  if (monday) await fileRoundup(db, redis, client, dateLocal, rows as EventRow[], health);
-  else await fileNote(db, redis, client, dateLocal, rows as EventRow[], health);
+  if (monday) await fileRoundup(db, redis, client, dateLocal, rows as EventRow[], issues);
+  else await fileNote(db, redis, client, dateLocal, rows as EventRow[], issues);
 }

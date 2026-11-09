@@ -46,6 +46,7 @@ import {
   stepCluster,
   trailing7,
 } from '../src/home/crimeRules.js';
+import { aqEpisodeStarts, dayFindings } from '../src/home/weatherRules.js';
 
 const TZ = 'America/Denver';
 const SERIOUS_RADII = [0.25, 0.5, 1] as const;
@@ -235,23 +236,21 @@ async function weather(window: string[]) {
       `&precipitation_unit=inch&timezone=${encodeURIComponent(TZ)}`, 'weather');
   const d = body.daily;
   const v = (k: string, i: number) => d[k]?.[i] ?? NaN;
-  let freeze = false, hard = false, snow = false;
+  // The live detector's rules (weatherRules.dayFindings). Season firsts
+  // assume the window starts after the summer.
+  let season = { freeze: false, hardFreeze: false, snow: false };
   for (let i = 1; i < d.time.length; i++) {
-    const day = d.time[i]!;
-    const hi = v('temperature_2m_max', i), lo = v('temperature_2m_min', i);
-    const sn = v('snowfall_sum', i), rain = v('precipitation_sum', i), gust = v('wind_gusts_10m_max', i);
-    const prevHi = v('temperature_2m_max', i - 1);
-    // season firsts (assumes the window starts after the summer)
-    if (!freeze && lo <= 32) { freeze = true; say(day, 'wx.first', `first freeze of the season (low ${lo.toFixed(0)}°F)`); }
-    if (!hard && lo <= 25) { hard = true; say(day, 'wx.first', `first hard freeze (low ${lo.toFixed(0)}°F)`); }
-    if (!snow && sn >= 0.5) { snow = true; say(day, 'wx.first', `first snow of the season (${sn.toFixed(1)} in)`); }
-    else if (snow && sn >= 3) say(day, 'wx.extreme', `${sn.toFixed(1)} in of snow`);
-    // ≥95 °F fired on 11 August–September days in run 1: ordinary Denver
-    // summer. 100 °F is where heat becomes news; NWS heat products cover the rest.
-    if (hi >= 100) say(day, 'wx.extreme', `heat: high ${hi.toFixed(0)}°F`);
-    if (prevHi - hi >= 25) say(day, 'wx.extreme', `cold front: high ${hi.toFixed(0)}°F, ${(prevHi - hi).toFixed(0)}° colder than yesterday`);
-    if (gust >= 50) say(day, 'wx.extreme', `wind gusts to ${gust.toFixed(0)} mph`);
-    if (rain >= 1) say(day, 'wx.extreme', `heavy rain: ${rain.toFixed(1)} in`);
+    const r = dayFindings({
+      date: d.time[i]!,
+      hi: v('temperature_2m_max', i),
+      lo: v('temperature_2m_min', i),
+      snow: v('snowfall_sum', i),
+      rain: v('precipitation_sum', i),
+      gust: v('wind_gusts_10m_max', i),
+      prevHi: v('temperature_2m_max', i - 1),
+    }, season);
+    season = r.season;
+    for (const f of r.findings) say(f.date, f.rule, f.line);
   }
 }
 
@@ -265,12 +264,12 @@ async function airQuality(window: string[]) {
     const a = body.hourly.us_aqi[i];
     if (typeof a === 'number') max.set(t.slice(0, 10), Math.max(max.get(t.slice(0, 10)) ?? 0, a));
   });
-  let inEpisode = false;
   for (const day of window) {
     const a = max.get(day);
     if (a === undefined) continue;
-    if (!inEpisode && a >= 101) { inEpisode = true; say(day, 'aq.episode', `air quality unhealthy for sensitive groups (AQI ${a.toFixed(0)})`); }
-    else if (inEpisode && a < 101) inEpisode = false;
+    if (aqEpisodeStarts(a, max.get(addDays(day, -1)) ?? NaN)) {
+      say(day, 'aq.episode', `air quality unhealthy for sensitive groups (AQI ${a.toFixed(0)})`);
+    }
   }
 }
 

@@ -1,5 +1,5 @@
 # Home briefing: build plan
-**2026-11-08 · ratified with owner changes (DECISIONS #144) · H0, H1 and H4 built, nothing deployed (#145, #146)**
+**2026-11-08 · ratified with owner changes (DECISIONS #144) · H0, H1, H4 deployed 2026-11-08; H2 built 2026-11-09 (#148), not deployed**
 
 The analyst stops writing about world flights and starts writing about home: what changed around the house, compared with the home's own normal. It speaks only when something changed. FOUNDATION §12 holds the rules; this document holds the order of work.
 
@@ -43,7 +43,12 @@ Each phase can be built and checked on its own, and nothing ships to orrery with
 - **Verification**: `verify:home` uses **synthetic** fixtures at a public Denver anchor (no real near-home rows in the repo), plus an optional `--live` fetch. The PGlite integration run is described in #145.
 - **Panel retune, moved to H4**: the CRIME exception page shows 90/90 days (#143 e). It should show only when a crime detector fired, read from `/api/pager/summary`. That needs H4's endpoint.
 
-### H2: Weather and air
+### H2: Weather and air, built (#148)
+Below is the plan as written. What changed in the build:
+- NWS alerts are read every 30 min.
+- The forecast and air pass runs once a day, in the two hours before the note.
+- COtrip banking is deferred, because the owner expects to ski much less this season.
+
 - **Collect**:
   - NWS active alerts every 10 min.
   - The Open-Meteo daily forecast at 05:00.
